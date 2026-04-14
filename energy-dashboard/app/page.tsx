@@ -609,7 +609,7 @@ export default function Dashboard() {
           <div>
             <h1 className="text-3xl font-bold text-white flex items-center gap-3">
               <Zap className="text-emerald-500 h-8 w-8" />
-              sistemYÖN™ <span className="text-slate-500 font-light text-xl hidden sm:inline">| Akıllı Sistem Yönü Temsilcisi</span>
+              Energy Agent <span className="text-slate-500 font-light text-xl hidden sm:inline">| Akıllı Sistem Yönü Temsilcisi</span>
             </h1>
             <p className="text-slate-500 mt-1 text-sm">Zaman yolculuğu destekli Şeffaflık Platformu Analiz Paneli</p>
           </div>
