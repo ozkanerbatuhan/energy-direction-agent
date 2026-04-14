@@ -274,7 +274,7 @@ export default function Dashboard() {
     
     // Prediction First
     try {
-      const predRes = await fetch("http://localhost:8000/api/v1/prediction" + dateQuery);
+      const predRes = await fetch("https://energy-direction-agent.onrender.com/api/v1/prediction" + dateQuery);
       if (!predRes.ok) throw new Error("Ana API (Prediction) isteği başarısız oldu.");
       const predJson = await predRes.json();
       if (predJson.error) throw new Error(predJson.error);
@@ -288,12 +288,12 @@ export default function Dashboard() {
     const [
       resLep, resRtCons, resRtGen, resDpp, resFin, resOut
     ] = await Promise.all([
-      fetchEndpoint("http://localhost:8000/api/v1/raw-data/load_estimation" + dateQuery),
-      fetchEndpoint("http://localhost:8000/api/v1/raw-data/realtime_consumption" + dateQuery),
-      fetchEndpoint("http://localhost:8000/api/v1/raw-data/realtime_generation" + dateQuery),
-      fetchEndpoint("http://localhost:8000/api/v1/raw-data/dpp" + dateQuery),
-      fetchEndpoint("http://localhost:8000/api/v1/raw-data/finance" + dateQuery),
-      fetchEndpoint("http://localhost:8000/api/v1/raw-data/outages" + dateQuery),
+      fetchEndpoint("https://energy-direction-agent.onrender.com/api/v1/raw-data/load_estimation" + dateQuery),
+      fetchEndpoint("https://energy-direction-agent.onrender.com/api/v1/raw-data/realtime_consumption" + dateQuery),
+      fetchEndpoint("https://energy-direction-agent.onrender.com/api/v1/raw-data/realtime_generation" + dateQuery),
+      fetchEndpoint("https://energy-direction-agent.onrender.com/api/v1/raw-data/dpp" + dateQuery),
+      fetchEndpoint("https://energy-direction-agent.onrender.com/api/v1/raw-data/finance" + dateQuery),
+      fetchEndpoint("https://energy-direction-agent.onrender.com/api/v1/raw-data/outages" + dateQuery),
     ]);
 
     setLep(resLep);
