@@ -4,3 +4,4 @@ httpx
 apscheduler
 pydantic-settings
 python-dotenv
+urllib3
