@@ -47,6 +47,24 @@ def _find_value(items: list[dict] | None, hour_key: str, fields: list[str]) -> f
     return None
 
 
+def _find_string(items: list[dict] | None, hour_key: str, fields: list[str]) -> str | None:
+    """
+    EPİAŞ API'sinden dönen item listesi içinde, belirtilen saate
+    ait olan kaydın değerini string olarak arar ve döndürür.
+    """
+    if not items:
+        return None
+
+    for item in items:
+        date_str = item.get("date") or item.get("tarih") or ""
+        if date_str[:13] == hour_key:
+            for f in fields:
+                val = item.get(f)
+                if val is not None:
+                    return str(val).strip()
+    return None
+
+
 def _extract_items(response: dict | None) -> list[dict]:
     """
     API yanıtından item listesini güvenle çıkarır.
@@ -57,7 +75,9 @@ def _extract_items(response: dict | None) -> list[dict]:
     if isinstance(body, dict):
         for key in ("items", "plannedPowerOutageList", "unplannedPowerOutageList",
                     "marketMessageList", "content", "realtimeConsumptionList", 
-                    "realtimeGenerationList", "loadEstimationPlanList", "dppList"):
+                    "realtimeGenerationList", "loadEstimationPlanList", "dppList",
+                    "interimMcpList", "systemMarginalPriceList", "orderSummaryDownList",
+                    "orderSummaryUpList", "systemDirectionList"):
             items = body.get(key, [])
             if items:
                 return items
@@ -132,14 +152,18 @@ def _get_direction(delta: float) -> str:
     return "DENGEDE (BALANCED)"
 
 
-def calculate_daily_forecast(raw_data: dict) -> dict | None:
+def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | None:
     """
     Tarihsel Baseline (Son 3 gün) ve Günlük Momentum yöntemini 
     kullanarak 24 saatlik güncel Delta tahminlemesi yapar.
     """
     logger.info("KGÜP ve Momentum destekli tahminleme algoritması başlatılıyor...")
 
-    now = datetime.now(tz=TZ_ISTANBUL)
+    if target_date:
+        now = datetime.strptime(target_date, "%Y-%m-%d").replace(tzinfo=TZ_ISTANBUL)
+    else:
+        now = datetime.now(tz=TZ_ISTANBUL)
+        
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     
     # 1. API Listelerini Çıkar
@@ -148,6 +172,14 @@ def calculate_daily_forecast(raw_data: dict) -> dict | None:
     gen_items = _extract_items(raw_data.get("realtime_generation"))
     dpp_items  = _extract_items(raw_data.get("dpp"))
     outages    = raw_data.get("outages")
+
+    # Finansallar Listeleri
+    finance_raw = raw_data.get("finance", {})
+    k_ptf_items = _extract_items(finance_raw.get("k_ptf"))
+    smf_items = _extract_items(finance_raw.get("smf"))
+    yat_items = _extract_items(finance_raw.get("yat"))
+    yal_items = _extract_items(finance_raw.get("yal"))
+    sys_dir_items = _extract_items(finance_raw.get("system_direction"))
 
     # ---------------------------------------------------------
     # ADIM 1: Tarihsel Profil (Baseline) Çıkarma
@@ -238,9 +270,11 @@ def calculate_daily_forecast(raw_data: dict) -> dict | None:
         today_momentum = sum(today_diff_from_baseline) / len(today_diff_from_baseline)
 
     # ---------------------------------------------------------
-    # ADIM 3: Gelecek Saatlerin Tahmini
+    # ADIM 3: Gelecek Saatlerin Tahmini ve Açıklanabilirlik (Explainability)
     # ---------------------------------------------------------
     for p in hourly_predictions:
+        t_key = p["hour"]
+        
         if p["is_forecast"]:
             base = p.pop("_base", 0.0)
             # Tahmini Delta = Geçmiş Profil (Baseline) + Güncel Momentum + Gelecek Arızalar
@@ -248,6 +282,74 @@ def calculate_daily_forecast(raw_data: dict) -> dict | None:
             
             p["delta_mw"] = round(forecast_delta, 2)
             p["direction"] = _get_direction(forecast_delta)
+
+            # --- AÇIKLAMA / GEREKÇE (REASONING) OLUŞTURMA ---
+            reasons = []
+            
+            # 1. Arıza Etkisi
+            if p["outage_mw"] > 0:
+                reasons.append(f"Piyasada {p['outage_mw']} MW'lık santral kesintisi/arızası mevcut.")
+                
+            # 2. Momentum Etkisi (Bugünün trendi çok sapmışsa, örn: 500 MW üzeri)
+            if abs(today_momentum) > 500:
+                trend_type = "açık (deficit)" if today_momentum > 0 else "fazla (surplus)"
+                reasons.append(f"Bugünün genel trendinde {abs(round(today_momentum))} MW'lık güçlü bir {trend_type} ivmesi var.")
+                
+            # 3. Tarihsel Profil (Baseline) Etkisi
+            if base > 500:
+                reasons.append("Geçmiş 3 günün aynı saatinde de sistem yüksek açık vermiş (Karakteristik Puant).")
+            elif base < -500:
+                reasons.append("Geçmiş 3 günün aynı saatinde sistem yüksek fazla vermiş (Tüketim düşüşü).")
+                
+            # Eğer yukarıdaki çok belirgin sapmalar yoksa
+            if not reasons:
+                reasons.append("Geçmiş günlerin rutini ve bugünün normal trendi devam ediyor.")
+
+            p["reasoning"] = " | ".join(reasons)
+        else:
+            # Gerçekleşen saatler için de bir açıklama eklenebilir
+            p["reasoning"] = "Değerler kesinleşti"
+
+        # --- SEVERITY & ARBITRAGE URGENCY ---
+        d_val = abs(p["delta_mw"] or 0)
+        if d_val > 2500:
+            score = 10
+        elif d_val > 1500:
+            score = 8
+        elif d_val > 1000:
+            score = 6
+        elif d_val > 500:
+            score = 4
+        else:
+            score = max(1, int((d_val / 500) * 3))
+            
+        if score >= 8:
+            urgency = "EKSTREM"
+        elif score >= 5:
+            urgency = "YÜKSEK"
+        elif score >= 3:
+            urgency = "ORTA"
+        else:
+            urgency = "DÜŞÜK"
+            
+        p["direction_forecast"] = p.pop("direction")
+        p["severity_score"] = score
+        p["arbitrage_urgency"] = urgency
+
+        # --- FINANSALLAR ---
+        k_ptf_tl = _find_value(k_ptf_items, t_key, ["price", "mcp", "ptf"])
+        smf_tl   = _find_value(smf_items, t_key, ["price", "smp", "systemMarginalPrice"])
+        yat_mw   = _find_value(yat_items, t_key, ["quantity", "totalQuantity", "netQuantity"])
+        yal_mw   = _find_value(yal_items, t_key, ["quantity", "totalQuantity", "netQuantity"])
+        sys_dir  = _find_string(sys_dir_items, t_key, ["direction", "systemDirection", "name"])
+
+        p["financials_and_official_data"] = {
+            "k_ptf_tl": k_ptf_tl,
+            "smf_tl": smf_tl,
+            "yal_mw": yal_mw,
+            "yat_mw": yat_mw,
+            "official_system_direction": sys_dir
+        }
 
     return {
         "historical_baselines_mw": {k: round(v, 2) for k, v in baselines_mw.items()},

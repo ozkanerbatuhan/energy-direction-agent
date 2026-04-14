@@ -16,7 +16,7 @@ from app.auth import refresh_tgt
 from app.config import settings
 from app.engine import calculate_daily_forecast
 from app.fetcher import fetch_all_data
-from app.storage import read_data, write_data
+from app.storage import read_data, write_data, cleanup_old_history
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,10 @@ async def fetch_and_process() -> None:
     if prediction:
         store["prediction"] = prediction
         await write_data(store)
+
+    # 4 — Eski önbellekleri sil
+    # Zamanlayıcı her çalıştığında, kullanılmayan eski history dosyalarını temizler
+    cleanup_old_history(days=3)
 
     logger.info("Zamanlayıcı: Döngü tamamlandı.")
     logger.info("═" * 50)

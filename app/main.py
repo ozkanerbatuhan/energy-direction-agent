@@ -11,10 +11,14 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.auth import refresh_tgt
 from app.scheduler import fetch_and_process, start_scheduler, stop_scheduler
-from app.storage import read_data
+from app.storage import read_data, read_history_cache, write_history_cache
+from app.fetcher import fetch_all_data, TZ_ISTANBUL
+from app.engine import calculate_daily_forecast
+from datetime import datetime
 
 # ──────────────────────────────────────────────
 # Loglama yapılandırması
@@ -76,30 +80,62 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # ──────────────────────────────────────────────
 # Endpoint'ler
 # ──────────────────────────────────────────────
-@app.get("/api/v1/raw-data", tags=["Veri"])
-async def get_raw_data():
+@app.get("/api/v1/raw-data/{dataset}", tags=["Veri"])
+async def get_raw_dataset(dataset: str, date: str | None = None, refresh: bool = False):
     """
-    EPİAŞ API'lerinden çekilen son ham verileri döndürür.
-    Henüz veri çekilmemişse bilgi mesajı döner.
+    Belirli bir ham veri setini (örneğin 'load_estimation', 'finance' vb.) döndürür.
+    İsteğe bağlı ?date=YYYY-MM-DD ile spesifik tarihteki veriyi anlık çeker.
+    ?refresh=true ile önbelleği zorla yeniler.
     """
     try:
-        store = await read_data()
-        raw = store.get("raw_data")
+        if date and date != datetime.now(tz=TZ_ISTANBUL).strftime("%Y-%m-%d"):
+            # Tarih belirtilmişse ve bugün değilse, önce önbelleği kontrol et
+            logger.info(f"Tarihli (Geçmiş) raw-data isteği: {date} (Refresh: {refresh})")
+            
+            raw = None
+            if not refresh:
+                raw = await read_history_cache(date)
+            
+            if not raw:
+                # Önbellekte yoksa API'den çek ve kaydet
+                logger.info(f"{date} için API'den taze veri çekiliyor...")
+                raw = await fetch_all_data(target_date=date)
+                await write_history_cache(date, raw)
+        else:
+            # Bugün için önbellekten oku
+            store = await read_data()
+            raw = store.get("raw_data")
+        
         if not raw:
             return JSONResponse(
                 status_code=200,
                 content={
                     "status": "waiting",
-                    "message": "Henüz veri çekilmedi. Zamanlayıcı çalışıyor, lütfen bekleyin.",
+                    "message": "Henüz veri çekilmedi veya bulunamadı.",
                 },
             )
-        return raw
+            
+        if dataset not in raw:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"'{dataset}' adında bir veri seti bulunamadı."}
+            )
+            
+        return raw[dataset]
     except Exception:
-        logger.exception("raw-data endpoint hatası")
+        logger.exception(f"raw-data/{dataset} endpoint hatası")
         return JSONResponse(
             status_code=500,
             content={"error": "Veri okunurken bir hata oluştu."},
@@ -107,20 +143,39 @@ async def get_raw_data():
 
 
 @app.get("/api/v1/prediction", tags=["Tahmin"])
-async def get_prediction():
+async def get_prediction(date: str | None = None, refresh: bool = False):
     """
     Hesaplanan son Delta değerini ve Sistem Yönünü döndürür.
-    Henüz hesaplama yapılmamışsa bilgi mesajı döner.
+    İsteğe bağlı ?date=YYYY-MM-DD ile spesifik tarihin tahminini anlık çeker.
+    ?refresh=true ile zorla baştan hesaplar.
     """
     try:
-        store = await read_data()
-        prediction = store.get("prediction")
+        if date and date != datetime.now(tz=TZ_ISTANBUL).strftime("%Y-%m-%d"):
+            # Tarihli özel hesaplama yap, önce önbellek kontrol et
+            logger.info(f"Tarihli (Geçmiş) prediction isteği: {date} (Refresh: {refresh})")
+            
+            raw = None
+            if not refresh:
+                raw = await read_history_cache(date)
+            
+            if not raw:
+                logger.info(f"{date} için API'den taze tahmin verisi çekiliyor...")
+                raw = await fetch_all_data(target_date=date)
+                await write_history_cache(date, raw)
+
+            if not raw:
+                return JSONResponse(status_code=404, content={"error": "Bu tarih için ham veri bulunamadı."})
+            prediction = calculate_daily_forecast(raw, target_date=date)
+        else:
+            store = await read_data()
+            prediction = store.get("prediction")
+
         if not prediction:
             return JSONResponse(
                 status_code=200,
                 content={
                     "status": "waiting",
-                    "message": "Henüz tahmin hesaplanmadı. Zamanlayıcı çalışıyor, lütfen bekleyin.",
+                    "message": "Henüz tahmin hesaplanmadı veya bulunamadı.",
                 },
             )
         return prediction

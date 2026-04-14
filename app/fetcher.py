@@ -29,6 +29,11 @@ from app.config import (
     EPIAS_REALTIME_GENERATION_PATH,
     EPIAS_UNPLANNED_OUTAGE_PATH,
     EPIAS_DPP_PATH,
+    EPIAS_KPTF_PATH,
+    EPIAS_SMF_PATH,
+    EPIAS_YAT_PATH,
+    EPIAS_YAL_PATH,
+    EPIAS_SYSTEM_DIRECTION_PATH,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,13 +46,17 @@ MAX_RETRIES = 3
 RETRY_BACKOFF = 2  # saniye
 
 
-def _fetch_range() -> tuple[str, str]:
+def _fetch_range(target_date: str = None) -> tuple[str, str]:
     """
     Geçmiş 3 günlük veriyi de kapsayacak biçimde
-    (today - 3 days) ile (today) arasındaki başlangıç ve bitiş saatlerini
+    (target_date - 3 days) ile (target_date) arasındaki başlangıç ve bitiş saatlerini
     EPİAŞ'ın beklediği T00:00:00+03:00 formatında döndürür.
     """
-    now = datetime.now(tz=TZ_ISTANBUL)
+    if target_date:
+        now = datetime.strptime(target_date, "%Y-%m-%d").replace(tzinfo=TZ_ISTANBUL)
+    else:
+        now = datetime.now(tz=TZ_ISTANBUL)
+        
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     past_start = day_start - timedelta(days=3)
     
@@ -61,12 +70,16 @@ def _fetch_range() -> tuple[str, str]:
     return start_str, end_str
 
 
-def _today_period() -> str:
+def _today_period(target_date: str = None) -> str:
     """
-    Bugünün tarihini EPİAŞ period formatında döndürür.
+    Belirtilen veya bugünün tarihini EPİAŞ period formatında döndürür.
     eptr2 referansıyla: YYYY-MM-DDT00:00:00+03:00
     """
-    now = datetime.now(tz=TZ_ISTANBUL)
+    if target_date:
+        now = datetime.strptime(target_date, "%Y-%m-%d").replace(tzinfo=TZ_ISTANBUL)
+    else:
+        now = datetime.now(tz=TZ_ISTANBUL)
+        
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     fmt = "%Y-%m-%dT%H:%M:%S%z"
     raw = day_start.strftime(fmt)
@@ -130,9 +143,9 @@ async def _post(url: str, body: dict, tgt: str) -> dict | None:
     return await loop.run_in_executor(None, _post_sync, url, body, tgt)
 
 
-async def fetch_all_data() -> dict:
+async def fetch_all_data(target_date: str = None) -> dict:
     """
-    Tüm uç noktalardan bugüne ait verileri çeker.
+    Tüm uç noktalardan bugüne veya belirtilen güne ait verileri çeker.
 
     Returns:
         {
@@ -149,8 +162,8 @@ async def fetch_all_data() -> dict:
         logger.error("TGT mevcut değil — veri çekilemiyor.")
         return {}
 
-    start_date, end_date = _fetch_range()
-    period = _today_period()
+    start_date, end_date = _fetch_range(target_date)
+    period = _today_period(target_date)
     date_body = {"startDate": start_date, "endDate": end_date}
     dpp_body = {"startDate": start_date, "endDate": end_date, "region": "TR1"}
     period_body = {"period": period}
@@ -206,6 +219,14 @@ async def fetch_all_data() -> dict:
         "OK" if unplanned_outage else "BAŞARISIZ",
     )
 
+    # 5 — Finansallar ve Dengeleme (Trading Terminal)
+    k_ptf = await _post(f"{EPIAS_BASE_URL}{EPIAS_KPTF_PATH}", date_body, tgt)
+    smf = await _post(f"{EPIAS_BASE_URL}{EPIAS_SMF_PATH}", date_body, tgt)
+    yat = await _post(f"{EPIAS_BASE_URL}{EPIAS_YAT_PATH}", date_body, tgt)
+    yal = await _post(f"{EPIAS_BASE_URL}{EPIAS_YAL_PATH}", date_body, tgt)
+    sys_dir = await _post(f"{EPIAS_BASE_URL}{EPIAS_SYSTEM_DIRECTION_PATH}", date_body, tgt)
+    logger.info("Finansallar (K.PTF / SMF / YAT / YAL / YÖN) Çekildi.")
+
     now_str = datetime.now(tz=TZ_ISTANBUL).isoformat()
 
     return {
@@ -217,6 +238,13 @@ async def fetch_all_data() -> dict:
             "unplanned": unplanned_outage,
         },
         "dpp": dpp,
+        "finance": {
+            "k_ptf": k_ptf,
+            "smf": smf,
+            "yat": yat,
+            "yal": yal,
+            "system_direction": sys_dir
+        },
         "fetched_at": now_str,
         "date_range": {"start": start_date, "end": end_date},
     }

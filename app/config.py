@@ -59,3 +59,18 @@ EPIAS_DPP_PATH = "/electricity-service/v1/generation/data/dpp"
 # Arızalar / Kesintiler — Planlı ve Plansız
 EPIAS_PLANNED_OUTAGE_PATH = "/electricity-service/v1/consumption/data/planned-power-outage-info"
 EPIAS_UNPLANNED_OUTAGE_PATH = "/electricity-service/v1/consumption/data/unplanned-power-outage-info"
+
+# K.PTF (Kesinleşmemiş Piyasa Takas Fiyatı)
+EPIAS_KPTF_PATH = "/electricity-service/v1/markets/dam/data/interim-mcp"
+
+# SMF (Sistem Marjinal Fiyatı)
+EPIAS_SMF_PATH = "/electricity-service/v1/markets/bpm/data/system-marginal-price"
+
+# YAT (Yük Atma)
+EPIAS_YAT_PATH = "/electricity-service/v1/markets/bpm/data/order-summary-down"
+
+# YAL (Yük Alma)
+EPIAS_YAL_PATH = "/electricity-service/v1/markets/bpm/data/order-summary-up"
+
+# Sistem Yönü
+EPIAS_SYSTEM_DIRECTION_PATH = "/electricity-service/v1/markets/bpm/data/system-direction"
