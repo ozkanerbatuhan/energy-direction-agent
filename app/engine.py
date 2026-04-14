@@ -243,9 +243,9 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
             hourly_predictions.append({
                 "hour": t_key,
                 "is_forecast": False,
-                "delta_mw": round(delta, 2),
-                "direction": _get_direction(delta),
-                "outage_mw": outage
+                "realized_delta_mw": round(delta, 2),
+                "outage_mw": outage,
+                "_base": baselines_mw.get(hour_str, 0.0)
             })
             
             # Momentumu bulmak için Baseline'dan saptığı farkı kaydet
@@ -258,8 +258,7 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
             hourly_predictions.append({
                 "hour": t_key,
                 "is_forecast": True,
-                "delta_mw": None, # Adım 3'te dolacak
-                "direction": None,
+                "realized_delta_mw": None,
                 "outage_mw": outage,
                 "_base": baselines_mw.get(hour_str, 0.0)
             })
@@ -270,71 +269,40 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
         today_momentum = sum(today_diff_from_baseline) / len(today_diff_from_baseline)
 
     # ---------------------------------------------------------
-    # ADIM 3: Gelecek Saatlerin Tahmini ve Açıklanabilirlik (Explainability)
+    # ADIM 3: Tüm Saatlerin Teorik Tahmini ve Gerekçe (Reasoning)
     # ---------------------------------------------------------
     for p in hourly_predictions:
         t_key = p["hour"]
+        base = p.pop("_base", 0.0)
+
+        # Tahmini Delta = Geçmiş Profil (Baseline) + Güncel Momentum + Gelecek Arızalar
+        forecast_delta = base + today_momentum + p["outage_mw"]
+        p["forecast_delta_mw"] = round(forecast_delta, 2)
+        p["forecast_direction"] = _get_direction(forecast_delta)
         
-        if p["is_forecast"]:
-            base = p.pop("_base", 0.0)
-            # Tahmini Delta = Geçmiş Profil (Baseline) + Güncel Momentum + Gelecek Arızalar
-            forecast_delta = base + today_momentum + p["outage_mw"]
+        # --- AÇIKLAMA / GEREKÇE (REASONING) OLUŞTURMA ---
+        reasons = []
+        
+        # 1. Arıza Etkisi
+        if p["outage_mw"] > 0:
+            reasons.append(f"Piyasada {p['outage_mw']} MW'lık arıza tespit edildi")
             
-            p["delta_mw"] = round(forecast_delta, 2)
-            p["direction"] = _get_direction(forecast_delta)
+        # 2. Momentum Etkisi
+        if abs(today_momentum) > 500:
+            trend_type = "açık" if today_momentum > 0 else "fazla"
+            reasons.append(f"Genel trendde {abs(round(today_momentum))} MW'lık güçlü {trend_type} ivmesi")
+            
+        # 3. Tarihsel Profil (Baseline) Etkisi
+        if base > 500:
+            reasons.append("Tarihsel profile göre bu saatlerde sistem ağırlıklı açık verir")
+        elif base < -500:
+            reasons.append("Tarihsel profile göre bu saatlerde sistem ağırlıklı fazla verir")
+            
+        # Eğer yukarıdaki çok belirgin sapmalar yoksa
+        if not reasons:
+            reasons.append("Ağırlıklı istikrarlı seyir bekleniyor")
 
-            # --- AÇIKLAMA / GEREKÇE (REASONING) OLUŞTURMA ---
-            reasons = []
-            
-            # 1. Arıza Etkisi
-            if p["outage_mw"] > 0:
-                reasons.append(f"Piyasada {p['outage_mw']} MW'lık santral kesintisi/arızası mevcut.")
-                
-            # 2. Momentum Etkisi (Bugünün trendi çok sapmışsa, örn: 500 MW üzeri)
-            if abs(today_momentum) > 500:
-                trend_type = "açık (deficit)" if today_momentum > 0 else "fazla (surplus)"
-                reasons.append(f"Bugünün genel trendinde {abs(round(today_momentum))} MW'lık güçlü bir {trend_type} ivmesi var.")
-                
-            # 3. Tarihsel Profil (Baseline) Etkisi
-            if base > 500:
-                reasons.append("Geçmiş 3 günün aynı saatinde de sistem yüksek açık vermiş (Karakteristik Puant).")
-            elif base < -500:
-                reasons.append("Geçmiş 3 günün aynı saatinde sistem yüksek fazla vermiş (Tüketim düşüşü).")
-                
-            # Eğer yukarıdaki çok belirgin sapmalar yoksa
-            if not reasons:
-                reasons.append("Geçmiş günlerin rutini ve bugünün normal trendi devam ediyor.")
-
-            p["reasoning"] = " | ".join(reasons)
-        else:
-            # Gerçekleşen saatler için de bir açıklama eklenebilir
-            p["reasoning"] = "Değerler kesinleşti"
-
-        # --- SEVERITY & ARBITRAGE URGENCY ---
-        d_val = abs(p["delta_mw"] or 0)
-        if d_val > 2500:
-            score = 10
-        elif d_val > 1500:
-            score = 8
-        elif d_val > 1000:
-            score = 6
-        elif d_val > 500:
-            score = 4
-        else:
-            score = max(1, int((d_val / 500) * 3))
-            
-        if score >= 8:
-            urgency = "EKSTREM"
-        elif score >= 5:
-            urgency = "YÜKSEK"
-        elif score >= 3:
-            urgency = "ORTA"
-        else:
-            urgency = "DÜŞÜK"
-            
-        p["direction_forecast"] = p.pop("direction")
-        p["severity_score"] = score
-        p["arbitrage_urgency"] = urgency
+        p["reasoning"] = " | ".join(reasons)
 
         # --- FINANSALLAR ---
         k_ptf_tl = _find_value(k_ptf_items, t_key, ["price", "mcp", "ptf"])

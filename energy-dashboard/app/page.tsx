@@ -26,13 +26,11 @@ type FinancialData = {
 type HourlyPrediction = {
   hour: string;
   is_forecast: boolean;
-  delta_mw: number;
+  forecast_delta_mw: number;
+  realized_delta_mw: number | null;
   outage_mw: number;
   reasoning: string;
-  direction_forecast: string;
-  severity_score: number;
-  arbitrage_urgency: string;
-  financials_and_official_data: FinancialData;
+  forecast_direction: string;
 };
 
 type PredictionResponse = {
@@ -485,7 +483,7 @@ export default function Dashboard() {
         </div>
 
         <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6 pt-8">
-          <h2 className="text-lg font-medium text-white mb-6">24 Saatlik Enerji Açığı / Fazlası Tahmini Tablosu (MW)</h2>
+          <h2 className="text-lg font-medium text-white mb-6">24 Saatlik Akıllı Tahmin Dağılımı (MW)</h2>
           <div className="h-[400px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={data.hourly_predictions} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
@@ -497,16 +495,20 @@ export default function Dashboard() {
                   content={({ active, payload }) => {
                     if (active && payload && payload.length) {
                       const hourData = payload[0].payload as HourlyPrediction;
-                      const isDeficit = hourData.delta_mw > 0;
+                      const isDeficit = hourData.forecast_delta_mw > 0;
                       return (
                         <div className="bg-slate-900 border border-slate-700 p-4 rounded-lg shadow-2xl max-w-xs">
                           <div className="font-bold text-lg text-white mb-2">{extractHour(hourData.hour)}</div>
                           <div className={`text-xl font-bold mb-2 ${isDeficit ? 'text-rose-400' : 'text-emerald-400'}`}>
-                            {hourData.delta_mw} MW <span className="text-sm font-normal">({hourData.direction_forecast})</span>
+                            {hourData.forecast_delta_mw} MW <span className="text-sm font-normal">({hourData.forecast_direction})</span>
                           </div>
-                          <div className="text-xs text-slate-400 space-y-1 mb-2">
-                            <p>Risk Puanı: <span className="text-amber-400">{hourData.severity_score}/10</span></p>
-                            <p>Momentum Yükü: <span className="text-slate-200">{hourData.outage_mw} MW</span></p>
+                          {!hourData.is_forecast && hourData.realized_delta_mw && (
+                            <div className="mt-2 pt-2 border-t border-slate-700 text-sm">
+                               Gerçekleşen: <span className="font-bold text-white">{hourData.realized_delta_mw} MW</span>
+                            </div>
+                          )}
+                          <div className="text-xs text-slate-400 space-y-1 mb-2 mt-2">
+                            <p>Arıza Etkisi: <span className="text-slate-200">{hourData.outage_mw} MW</span></p>
                           </div>
                           <div className="text-xs text-slate-300 border-t border-slate-700 pt-2 italic">{hourData.reasoning}</div>
                         </div>
@@ -516,9 +518,9 @@ export default function Dashboard() {
                   }}
                 />
                 <ReferenceLine y={0} stroke="#475569" />
-                <Bar dataKey="delta_mw" radius={[4, 4, 0, 0]}>
+                <Bar dataKey="forecast_delta_mw" radius={[4, 4, 0, 0]}>
                   {data.hourly_predictions.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.delta_mw > 0 ? "#f43f5e" : "#10b981"} fillOpacity={entry.is_forecast ? 1 : 0.4}/>
+                    <Cell key={`cell-${index}`} fill={entry.forecast_delta_mw > 0 ? "#f43f5e" : "#10b981"} fillOpacity={entry.is_forecast ? 1 : 0.4}/>
                   ))}
                 </Bar>
               </BarChart>
@@ -528,51 +530,58 @@ export default function Dashboard() {
 
         <div className="bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden mt-6">
           <div className="p-6 border-b border-slate-800 flex justify-between items-center">
-            <h2 className="text-lg font-medium text-white">Detaylı Trader Karar Tablosu</h2>
+            <h2 className="text-lg font-medium text-white">Akıllı Tahmin İzleme Modülü</h2>
           </div>
           <div className="overflow-x-auto custom-scrollbar">
             <table className="w-full text-sm text-left">
               <thead className="text-xs text-slate-400 bg-slate-900 uppercase border-b border-slate-800 hidden md:table-header-group">
                 <tr>
-                  <th className="px-6 py-4">Saat</th>
-                  <th className="px-6 py-4">Durum</th>
-                  <th className="px-6 py-4">Yön & Delta</th>
-                  <th className="px-6 py-4">Finansal Sinyal</th>
-                  <th className="px-6 py-4 max-w-sm">Gerekçe / Reasoning</th>
-                  <th className="px-6 py-4">İşlem (Urgency)</th>
+                  <th className="px-6 py-4 w-[10%]">Saat</th>
+                  <th className="px-6 py-4 w-[15%]">Durum</th>
+                  <th className="px-6 py-4 w-[25%]">Yön & Sapma Tahmini</th>
+                  <th className="px-6 py-4 w-[50%]">Gerekçe / Reasoning</th>
                 </tr>
               </thead>
               <tbody className="flex-1 sm:flex-none">
                 {data.hourly_predictions.map((row, idx) => {
-                  const isDeficit = row.delta_mw > 0;
-                  const isExtreme = row.severity_score >= 8;
-                  const fin = row.financials_and_official_data;
+                  const isDeficit = row.forecast_delta_mw > 0;
+                  
                   return (
-                    <tr key={idx} className={`flex flex-col flex-no-wrap md:table-row mb-4 md:mb-0 border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors ${row.is_forecast ? 'bg-slate-900/20' : 'bg-transparent opacity-60'}`}>
+                    <tr key={idx} className={`flex flex-col flex-no-wrap md:table-row mb-4 md:mb-0 border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors ${row.is_forecast ? 'bg-slate-900/20' : 'bg-transparent opacity-80'}`}>
                       <td className="px-6 py-4 font-medium text-white whitespace-nowrap">{extractHour(row.hour)}</td>
                       <td className="px-6 py-4">
                         {row.is_forecast ? (
-                          <span className="bg-indigo-500/20 text-indigo-400 px-2 py-1 rounded text-xs font-medium border border-indigo-500/20 flex items-center gap-1 w-fit"><Sparkles className="w-3 h-3"/> TAHMİN</span>
+                          <span className="bg-indigo-500/20 text-indigo-400 px-2 py-1 rounded text-xs font-medium border border-indigo-500/20 flex items-center gap-1 w-fit"><Sparkles className="w-3 h-3"/> BEKLENEN</span>
                         ) : (
                           <span className="bg-slate-700/50 text-slate-300 px-2 py-1 rounded text-xs font-medium w-fit block">GERÇEKLEŞEN</span>
                         )}
                       </td>
                       <td className="px-6 py-4">
-                        <div className={`font-bold ${isDeficit ? 'text-rose-400' : 'text-emerald-400'}`}>{row.delta_mw} MW</div>
-                        <div className="text-[10px] opacity-70 mt-1">{row.direction_forecast}</div>
+                        {row.is_forecast ? (
+                          <>
+                            <div className={`font-bold ${isDeficit ? 'text-rose-400' : 'text-emerald-400'}`}>{row.forecast_delta_mw} MW</div>
+                            <div className="text-[10px] opacity-70 mt-1">{row.forecast_direction}</div>
+                          </>
+                        ) : (
+                          <div className="flex flex-col gap-1.5 text-xs bg-slate-950/40 p-2 rounded border border-slate-800/80 max-w-[200px]">
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-500">Tahmin:</span>
+                              <span className="font-semibold text-slate-300">{row.forecast_delta_mw} MW</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-500">Gerçek:</span>
+                              <span className="font-semibold text-white">{row.realized_delta_mw} MW</span>
+                            </div>
+                            <div className="flex justify-between items-center border-t border-slate-800/50 pt-1.5 mt-0.5">
+                              <span className="text-slate-500">Fark (Hata Payı):</span>
+                              <span className="font-mono text-emerald-400">{Math.abs(Number(row.realized_delta_mw) - row.forecast_delta_mw).toFixed(2)} MW</span>
+                            </div>
+                          </div>
+                        )}
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="space-y-1 text-xs">
-                          {fin.k_ptf_tl !== null && <div><span className="text-slate-500">PTF:</span> <span className="text-emerald-300">{fin.k_ptf_tl} ₺</span></div>}
-                          {fin.smf_tl !== null && <div><span className="text-slate-500">SMF:</span> <span className="text-emerald-300">{fin.smf_tl} ₺</span></div>}
-                          {!fin.k_ptf_tl && !fin.smf_tl && <span className="text-slate-700">-</span>}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-slate-300 text-xs max-w-xs md:max-w-md truncate" title={row.reasoning}>{row.reasoning}</td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                          {isExtreme && <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span></span>}
-                          <span className={`text-[11px] font-semibold tracking-wide ${row.severity_score >= 8 ? 'text-rose-400' : row.severity_score >= 5 ? 'text-amber-400' : row.severity_score >= 3 ? 'text-emerald-400' : 'text-slate-500'}`}>{row.arbitrage_urgency}</span>
+                      <td className="px-6 py-4 text-slate-300 text-xs w-full max-w-sm md:max-w-xl">
+                        <div className="line-clamp-2 leading-relaxed whitespace-normal" title={row.reasoning}>
+                           {row.reasoning}
                         </div>
                       </td>
                     </tr>
@@ -595,7 +604,7 @@ export default function Dashboard() {
           <div>
             <h1 className="text-3xl font-bold text-white flex items-center gap-3">
               <Zap className="text-emerald-500 h-8 w-8" />
-              sistemYÖN™ <span className="text-slate-500 font-light text-xl hidden sm:inline">| Advanced Trade Terminal</span>
+              sistemYÖN™ <span className="text-slate-500 font-light text-xl hidden sm:inline">| Akıllı Sistem Yönü Temsilcisi</span>
             </h1>
             <p className="text-slate-500 mt-1 text-sm">Zaman yolculuğu destekli Şeffaflık Platformu Analiz Paneli</p>
           </div>
