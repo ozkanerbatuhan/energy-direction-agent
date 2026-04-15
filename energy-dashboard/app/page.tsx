@@ -515,7 +515,16 @@ export default function Dashboard() {
           {/* Chart */}
           <div className="h-[400px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={data.hourly_predictions} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
+              {/* Enrich data: for agent tab, show realized if available, else forecast */}
+              <BarChart 
+                data={data.hourly_predictions.map(p => ({
+                  ...p,
+                  display_delta_mw: chartTab === "agent"
+                    ? (p.realized_delta_mw !== null ? p.realized_delta_mw : p.forecast_delta_mw)
+                    : p.plan_delta_mw
+                }))}
+                margin={{ top: 20, right: 30, left: 0, bottom: 0 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
                 <XAxis dataKey="hour" tickFormatter={extractHour} stroke="#475569" tick={{fill: '#94a3b8', fontSize: 12}} axisLine={{ stroke: '#334155' }}/>
                 <YAxis stroke="#475569" tick={{fill: '#94a3b8', fontSize: 12}} axisLine={{ stroke: '#334155' }} tickFormatter={(val) => `${val} MW`}/>
@@ -531,12 +540,13 @@ export default function Dashboard() {
                           <div className="font-bold text-lg text-white mb-2">{extractHour(hourData.hour)}</div>
                           {chartTab === "agent" ? (
                             <>
-                              <div className={`text-xl font-bold mb-2 ${isDeficit ? 'text-rose-400' : 'text-emerald-400'}`}>
-                                {hourData.forecast_delta_mw} MW <span className="text-sm font-normal">({hourData.forecast_direction})</span>
+                              <div className={`text-xl font-bold mb-2 ${(hourData.forecast_delta_mw > 0) ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                Tahmin: {hourData.forecast_delta_mw} MW <span className="text-sm font-normal">({hourData.forecast_direction})</span>
                               </div>
                               {!hourData.is_forecast && hourData.realized_delta_mw !== null && (
-                                <div className="mt-1 pt-1 border-t border-slate-700 text-sm">
-                                   Gerçekleşen: <span className="font-bold text-white">{hourData.realized_delta_mw} MW</span>
+                                <div className="mt-1 pt-2 border-t border-slate-700 text-sm">
+                                  <span className="text-slate-400">Gerçekleşen:</span> <span className={`font-bold ${hourData.realized_delta_mw > 0 ? 'text-rose-300' : 'text-emerald-300'}`}>{hourData.realized_delta_mw} MW</span>
+                                  <div className="text-xs text-slate-500 mt-0.5">Fark (hata payı): {Math.abs(hourData.realized_delta_mw - hourData.forecast_delta_mw).toFixed(2)} MW</div>
                                 </div>
                               )}
                             </>
@@ -559,11 +569,15 @@ export default function Dashboard() {
                   }}
                 />
                 <ReferenceLine y={0} stroke="#475569" />
-                <Bar dataKey={chartTab === "agent" ? "forecast_delta_mw" : "plan_delta_mw"} radius={[4, 4, 0, 0]}>
+                <Bar dataKey="display_delta_mw" radius={[4, 4, 0, 0]}>
                   {data.hourly_predictions.map((entry, index) => {
-                    const val = chartTab === "agent" ? entry.forecast_delta_mw : (entry.plan_delta_mw ?? 0);
+                    const val = chartTab === "agent"
+                      ? (entry.realized_delta_mw !== null ? entry.realized_delta_mw : entry.forecast_delta_mw)
+                      : (entry.plan_delta_mw ?? 0);
+                    // Gerçekleşmiş saatler daha koyu, tahminler daha soluk
+                    const opacity = (chartTab === "agent" && !entry.is_forecast) ? 1 : 0.75;
                     return (
-                      <Cell key={`cell-${index}`} fill={val > 0 ? "#f43f5e" : "#10b981"} fillOpacity={entry.is_forecast ? 1 : 0.5}/>
+                      <Cell key={`cell-${index}`} fill={val > 0 ? "#f43f5e" : "#10b981"} fillOpacity={opacity}/>
                     );
                   })}
                 </Bar>
