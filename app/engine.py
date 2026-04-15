@@ -8,8 +8,8 @@ Geçmiş (gerçekleşen) saatler için Formül:
 
 Gelecek saatler için Tahminleme (Forecasting) Formülü:
     Adım 1: Tarihsel Sapma (Baseline) = Son 3 günün o saate ait sapma ortalaması
-    Adım 2: Bugünün Trendi (Momentum) = Bugün gerçekleşen saatlerdeki (Sapma - Baseline) ortalaması
-    Tahmini Delta(H) = Baseline(H) + Momentum + Outage(H)
+    Adım 2: Saatlik Momentum (H) = Bugün o saate kadar gerçekleşen (Sapma-Baseline) ortalaması
+    Tahmini Delta(H) = Baseline(H) + Momentum(H) + Outage(H)
 
     Delta > 0  →  AÇIK (DEFICIT)
     Delta < 0  →  FAZLA (SURPLUS)
@@ -215,10 +215,10 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
         baselines_mw[hour_str] = avg_dev
 
     # ---------------------------------------------------------
-    # ADIM 2: Bugünün Sapmaları ve Momentum Hesabı
+    # ADIM 2: Bugünün Sapmaları ve Saatlik Momentum Hesabı
     # ---------------------------------------------------------
     today_str = today_start.strftime("%Y-%m-%d")
-    today_diff_from_baseline = []
+    cumulative_diffs = []  # Her saat için kendi momentumu hesaplanacak
     hourly_predictions = []
 
     for h in range(24):
@@ -231,6 +231,10 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
         d_gen  = _find_value(dpp_items,  t_key, ["toplam", "total", "value"])
         outage = _calculate_outage_mw(outages, t_key)
         
+        # Ham plan verileri (LEP & DPP) — Tab 2 için
+        lep_val = _find_value(load_items, t_key, ["lep", "llesValue", "value"])
+        dpp_val = _find_value(dpp_items, t_key, ["toplam", "total", "value"])
+        
         e_cons = e_cons or 0.0
         
         if r_cons is not None and r_gen is not None:
@@ -240,33 +244,40 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
             
             # Formül mantığı: Gerçekleşmiş Delta = T_Dev + Outage
             delta = today_dev + outage
+            
+            # Saatlik momentum: Bu saate kadar biriken farkların ortalaması
+            base_val = baselines_mw.get(hour_str, 0.0)
+            diff = today_dev - base_val
+            cumulative_diffs.append(diff)
+            hourly_momentum = sum(cumulative_diffs) / len(cumulative_diffs)
+            
             hourly_predictions.append({
                 "hour": t_key,
                 "is_forecast": False,
                 "realized_delta_mw": round(delta, 2),
                 "outage_mw": outage,
-                "_base": baselines_mw.get(hour_str, 0.0)
+                "_base": base_val,
+                "_momentum": hourly_momentum,
+                "lep_mw": round(lep_val, 2) if lep_val is not None else None,
+                "dpp_mw": round(dpp_val, 2) if dpp_val is not None else None,
             })
             
-            # Momentumu bulmak için Baseline'dan saptığı farkı kaydet
-            base_val = baselines_mw.get(hour_str, 0.0)
-            diff = today_dev - base_val
-            today_diff_from_baseline.append(diff)
-            
         else:
-            # Henüz gerçekleşmemiş (Gelecek) saat
+            # Henüz gerçekleşmemiş (Gelecek) saat — son bilinen momentumla devam et
+            latest_momentum = cumulative_diffs[-1] if cumulative_diffs else 0.0
+            if cumulative_diffs:
+                latest_momentum = sum(cumulative_diffs) / len(cumulative_diffs)
+            
             hourly_predictions.append({
                 "hour": t_key,
                 "is_forecast": True,
                 "realized_delta_mw": None,
                 "outage_mw": outage,
-                "_base": baselines_mw.get(hour_str, 0.0)
+                "_base": baselines_mw.get(hour_str, 0.0),
+                "_momentum": latest_momentum,
+                "lep_mw": round(lep_val, 2) if lep_val is not None else None,
+                "dpp_mw": round(dpp_val, 2) if dpp_val is not None else None,
             })
-
-    # Momentum, bugün gerçekleşen saatlerdeki (Sapma - Baseline) farkların ortalamasıdır.
-    today_momentum = 0.0
-    if today_diff_from_baseline:
-        today_momentum = sum(today_diff_from_baseline) / len(today_diff_from_baseline)
 
     # ---------------------------------------------------------
     # ADIM 3: Tüm Saatlerin Teorik Tahmini ve Gerekçe (Reasoning)
@@ -274,54 +285,52 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
     for p in hourly_predictions:
         t_key = p["hour"]
         base = p.pop("_base", 0.0)
+        momentum = p.pop("_momentum", 0.0)
 
-        # Tahmini Delta = Geçmiş Profil (Baseline) + Güncel Momentum + Gelecek Arızalar
-        forecast_delta = base + today_momentum + p["outage_mw"]
+        # Tahmini Delta = Geçmiş Profil (Baseline) + Saatlik Momentum + Arızalar
+        forecast_delta = base + momentum + p["outage_mw"]
         p["forecast_delta_mw"] = round(forecast_delta, 2)
         p["forecast_direction"] = _get_direction(forecast_delta)
+        
+        # Ham Plan Farkı (LEP - DPP)
+        if p["lep_mw"] is not None and p["dpp_mw"] is not None:
+            p["plan_delta_mw"] = round(p["lep_mw"] - p["dpp_mw"], 2)
+        else:
+            p["plan_delta_mw"] = None
         
         # --- AÇIKLAMA / GEREKÇE (REASONING) OLUŞTURMA ---
         reasons = []
         
         # 1. Arıza Etkisi
         if p["outage_mw"] > 0:
-            reasons.append(f"Piyasada {p['outage_mw']} MW'lık arıza tespit edildi")
+            reasons.append(f"Bu saatte {p['outage_mw']:.0f} MW arıza/kesinti etkisi var")
             
-        # 2. Momentum Etkisi
-        if abs(today_momentum) > 500:
-            trend_type = "açık" if today_momentum > 0 else "fazla"
-            reasons.append(f"Genel trendde {abs(round(today_momentum))} MW'lık güçlü {trend_type} ivmesi")
+        # 2. Momentum Etkisi (Saatlik)
+        if abs(momentum) > 200:
+            trend_type = "açık" if momentum > 0 else "fazla"
+            reasons.append(f"Saatlik momentum {abs(round(momentum))} MW {trend_type} yönünde")
+        elif abs(momentum) > 50:
+            trend_type = "açık" if momentum > 0 else "fazla"
+            reasons.append(f"Hafif {trend_type} eğilimi ({abs(round(momentum))} MW)")
             
         # 3. Tarihsel Profil (Baseline) Etkisi
         if base > 500:
-            reasons.append("Tarihsel profile göre bu saatlerde sistem ağırlıklı açık verir")
+            reasons.append(f"Tarihsel profil bu saatte {abs(round(base))} MW açık gösteriyor")
+        elif base > 200:
+            reasons.append(f"Tarihsel profil hafif açık ({abs(round(base))} MW)")
         elif base < -500:
-            reasons.append("Tarihsel profile göre bu saatlerde sistem ağırlıklı fazla verir")
+            reasons.append(f"Tarihsel profil bu saatte {abs(round(base))} MW fazla gösteriyor")
+        elif base < -200:
+            reasons.append(f"Tarihsel profil hafif fazla ({abs(round(base))} MW)")
             
-        # Eğer yukarıdaki çok belirgin sapmalar yoksa
+        # Eğer yukarıdaki belirgin sapmalar yoksa
         if not reasons:
-            reasons.append("Ağırlıklı istikrarlı seyir bekleniyor")
+            reasons.append("İstikrarlı seyir, belirgin sapma yok")
 
         p["reasoning"] = " | ".join(reasons)
 
-        # --- FINANSALLAR ---
-        k_ptf_tl = _find_value(k_ptf_items, t_key, ["price", "mcp", "ptf"])
-        smf_tl   = _find_value(smf_items, t_key, ["price", "smp", "systemMarginalPrice"])
-        yat_mw   = _find_value(yat_items, t_key, ["quantity", "totalQuantity", "netQuantity"])
-        yal_mw   = _find_value(yal_items, t_key, ["quantity", "totalQuantity", "netQuantity"])
-        sys_dir  = _find_string(sys_dir_items, t_key, ["direction", "systemDirection", "name"])
-
-        p["financials_and_official_data"] = {
-            "k_ptf_tl": k_ptf_tl,
-            "smf_tl": smf_tl,
-            "yal_mw": yal_mw,
-            "yat_mw": yat_mw,
-            "official_system_direction": sys_dir
-        }
-
     return {
         "historical_baselines_mw": {k: round(v, 2) for k, v in baselines_mw.items()},
-        "today_momentum_mw": round(today_momentum, 2),
         "hourly_predictions": hourly_predictions,
         "calculated_at": now.isoformat()
     }

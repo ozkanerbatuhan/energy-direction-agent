@@ -12,16 +12,7 @@ import {
   Cell,
   ReferenceLine
 } from "recharts";
-import { Activity, Clock, Zap, AlertTriangle, ShieldCheck, ArrowRightLeft, Database, Sparkles, PowerOff, BellRing, Calendar } from "lucide-react";
-
-// --- Types ---
-type FinancialData = {
-  k_ptf_tl: number | null;
-  smf_tl: number | null;
-  yal_mw: number | null;
-  yat_mw: number | null;
-  official_system_direction: string | null;
-};
+import { Activity, Clock, Zap, AlertTriangle, ShieldCheck, ArrowRightLeft, Database, Sparkles, PowerOff, BellRing, Calendar, Info } from "lucide-react";
 
 type HourlyPrediction = {
   hour: string;
@@ -31,11 +22,13 @@ type HourlyPrediction = {
   outage_mw: number;
   reasoning: string;
   forecast_direction: string;
+  lep_mw: number | null;
+  dpp_mw: number | null;
+  plan_delta_mw: number | null;
 };
 
 type PredictionResponse = {
   historical_baselines_mw: Record<string, number>;
-  today_momentum_mw: number;
   hourly_predictions: HourlyPrediction[];
   calculated_at: string;
 };
@@ -437,53 +430,70 @@ export default function Dashboard() {
     );
   };
 
+  const [chartTab, setChartTab] = useState<"agent" | "plan">("agent");
+  const [showChartInfo, setShowChartInfo] = useState(false);
+
+  const chartInfoTexts: Record<string, string> = {
+    agent: "Tarihsel profil (son 3 gün) + saatlik momentum + arıza etkisi kullanılarak hesaplanan AI tahmin modeli. Koyu barlar tahmin, soluk barlar gerçekleşen saatleri temsil eder.",
+    plan: "EPİAŞ Yük Tahmin Planı (LEP) ile Kesinleşmiş Gün Öncesi Üretim Planı (DPP) arasındaki ham fark. Piyasanın AI katmanı olmadan teorik beklentisini gösterir."
+  };
+
   const renderPredictionTab = () => {
     if (!data) return <div className="text-slate-500">Geçmişe ait tahmin verisi bulunamadı.</div>;
+
     return (
       <div className="space-y-6 animate-in fade-in slide-in-from-left-2 duration-500">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6 flex flex-col justify-between relative overflow-hidden group">
-            <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
-              <ArrowRightLeft className="w-24 h-24" />
-            </div>
-            <div className="flex items-center gap-3 text-slate-400 mb-2">
-              <Activity className="w-5 h-5" /> Güncel Momentum Paritesi
-            </div>
-            <div className={`text-4xl font-light tracking-tight ${data.today_momentum_mw > 0 ? "text-rose-400" : "text-emerald-400"}`}>
-              {data.today_momentum_mw > 0 ? "+" : ""}{data.today_momentum_mw} <span className="text-lg text-slate-500">MW</span>
-            </div>
-            <div className="mt-2 text-sm text-slate-500">
-              {data.today_momentum_mw > 0 ? "Piyasa Açık (Deficit) İvmesinde" : "Piyasa Fazla (Surplus) İvmesinde"}
-            </div>
+        {/* Compact Status Bar */}
+        <div className="flex flex-wrap items-center gap-4 bg-slate-900/40 border border-slate-800 rounded-lg px-4 py-3">
+          <div className="flex items-center gap-2 text-sm">
+            <Clock className="w-4 h-4 text-slate-500" />
+            <span className="text-slate-400">Son Hesaplama:</span>
+            <span className="text-white font-medium">{formatTime(data.calculated_at)}</span>
           </div>
-
-          <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6 flex flex-col justify-between">
-            <div className="flex items-center gap-3 text-slate-400 mb-2">
-              <Clock className="w-5 h-5" /> Son Hesaplama
-            </div>
-            <div className="text-4xl font-light tracking-tight text-white">
-              {formatTime(data.calculated_at)}
-            </div>
-            <div className="mt-2 text-sm text-slate-500">
-              Avrupa/İstanbul (TSİ)
-            </div>
-          </div>
-
-          <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6 flex flex-col justify-between">
-            <div className="flex items-center gap-3 text-slate-400 mb-2">
-              <ShieldCheck className="w-5 h-5 text-emerald-500" /> API Durumu
-            </div>
-            <div className="flex items-center gap-4 mt-2">
-              <div className="text-xl text-emerald-400 font-medium">Hedef Tarih Çekildi</div>
-            </div>
-            <div className="mt-2 text-sm text-slate-500">
-              Tarih: {selectedDate || "Bugün"} 
-            </div>
+          <div className="w-px h-4 bg-slate-700 hidden sm:block" />
+          <div className="flex items-center gap-2 text-sm">
+            <ShieldCheck className="w-4 h-4 text-emerald-500" />
+            <span className="text-emerald-400 font-medium">Veri Hazır</span>
+            <span className="text-slate-500">— {selectedDate}</span>
           </div>
         </div>
 
-        <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6 pt-8">
-          <h2 className="text-lg font-medium text-white mb-6">24 Saatlik Akıllı Tahmin Dağılımı (MW)</h2>
+        {/* CHART with inner tabs */}
+        <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6 pt-5">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 gap-3">
+            {/* Chart Tabs */}
+            <div className="flex gap-1 bg-slate-950/50 p-1 rounded-lg border border-slate-800">
+              <button
+                onClick={() => setChartTab("agent")}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${chartTab === "agent" ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shadow" : "text-slate-400 hover:text-slate-200"}`}
+              >
+                <div className="flex items-center gap-1.5"><Sparkles className="w-3 h-3" /> Agent Tahmini</div>
+              </button>
+              <button
+                onClick={() => setChartTab("plan")}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${chartTab === "plan" ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 shadow" : "text-slate-400 hover:text-slate-200"}`}
+              >
+                <div className="flex items-center gap-1.5"><Database className="w-3 h-3" /> Ham Plan (LEP - DPP)</div>
+              </button>
+            </div>
+            {/* Info button */}
+            <div className="relative">
+              <button
+                onMouseEnter={() => setShowChartInfo(true)}
+                onMouseLeave={() => setShowChartInfo(false)}
+                className="text-slate-500 hover:text-slate-300 transition-colors p-1"
+              >
+                <Info className="w-4 h-4" />
+              </button>
+              {showChartInfo && (
+                <div className="absolute right-0 top-8 z-50 bg-slate-900 border border-slate-700 rounded-lg p-3 shadow-2xl w-72 text-xs text-slate-300 leading-relaxed">
+                  {chartInfoTexts[chartTab]}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Chart */}
           <div className="h-[400px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={data.hourly_predictions} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
@@ -495,22 +505,34 @@ export default function Dashboard() {
                   content={({ active, payload }) => {
                     if (active && payload && payload.length) {
                       const hourData = payload[0].payload as HourlyPrediction;
-                      const isDeficit = hourData.forecast_delta_mw > 0;
+                      const val = chartTab === "agent" ? hourData.forecast_delta_mw : hourData.plan_delta_mw;
+                      const isDeficit = (val || 0) > 0;
                       return (
                         <div className="bg-slate-900 border border-slate-700 p-4 rounded-lg shadow-2xl max-w-xs">
                           <div className="font-bold text-lg text-white mb-2">{extractHour(hourData.hour)}</div>
-                          <div className={`text-xl font-bold mb-2 ${isDeficit ? 'text-rose-400' : 'text-emerald-400'}`}>
-                            {hourData.forecast_delta_mw} MW <span className="text-sm font-normal">({hourData.forecast_direction})</span>
-                          </div>
-                          {!hourData.is_forecast && hourData.realized_delta_mw && (
-                            <div className="mt-2 pt-2 border-t border-slate-700 text-sm">
-                               Gerçekleşen: <span className="font-bold text-white">{hourData.realized_delta_mw} MW</span>
-                            </div>
+                          {chartTab === "agent" ? (
+                            <>
+                              <div className={`text-xl font-bold mb-2 ${isDeficit ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                {hourData.forecast_delta_mw} MW <span className="text-sm font-normal">({hourData.forecast_direction})</span>
+                              </div>
+                              {!hourData.is_forecast && hourData.realized_delta_mw !== null && (
+                                <div className="mt-1 pt-1 border-t border-slate-700 text-sm">
+                                   Gerçekleşen: <span className="font-bold text-white">{hourData.realized_delta_mw} MW</span>
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <div className={`text-xl font-bold mb-2 ${isDeficit ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                {hourData.plan_delta_mw ?? '—'} MW
+                              </div>
+                              <div className="text-xs text-slate-400 space-y-1 mt-1">
+                                <p>LEP (Yük Tahmini): <span className="text-slate-200">{hourData.lep_mw ?? '—'} MW</span></p>
+                                <p>DPP (Üretim Planı): <span className="text-slate-200">{hourData.dpp_mw ?? '—'} MW</span></p>
+                              </div>
+                            </>
                           )}
-                          <div className="text-xs text-slate-400 space-y-1 mb-2 mt-2">
-                            <p>Arıza Etkisi: <span className="text-slate-200">{hourData.outage_mw} MW</span></p>
-                          </div>
-                          <div className="text-xs text-slate-300 border-t border-slate-700 pt-2 italic">{hourData.reasoning}</div>
+                          <div className="text-xs text-slate-300 border-t border-slate-700 pt-2 mt-2 italic">{hourData.reasoning}</div>
                         </div>
                       );
                     }
@@ -518,82 +540,125 @@ export default function Dashboard() {
                   }}
                 />
                 <ReferenceLine y={0} stroke="#475569" />
-                <Bar dataKey="forecast_delta_mw" radius={[4, 4, 0, 0]}>
-                  {data.hourly_predictions.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.forecast_delta_mw > 0 ? "#f43f5e" : "#10b981"} fillOpacity={entry.is_forecast ? 1 : 0.4}/>
-                  ))}
+                <Bar dataKey={chartTab === "agent" ? "forecast_delta_mw" : "plan_delta_mw"} radius={[4, 4, 0, 0]}>
+                  {data.hourly_predictions.map((entry, index) => {
+                    const val = chartTab === "agent" ? entry.forecast_delta_mw : (entry.plan_delta_mw ?? 0);
+                    return (
+                      <Cell key={`cell-${index}`} fill={val > 0 ? "#f43f5e" : "#10b981"} fillOpacity={entry.is_forecast ? 1 : 0.5}/>
+                    );
+                  })}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        <div className="bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden mt-6">
+        {/* TABLE — synced with chart tab */}
+        <div className="bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden">
           <div className="p-6 border-b border-slate-800 flex justify-between items-center">
-            <h2 className="text-lg font-medium text-white">Akıllı Tahmin İzleme Modülü</h2>
+            <h2 className="text-lg font-medium text-white">
+              {chartTab === "agent" ? "Akıllı Tahmin İzleme Modülü" : "EPİAŞ Ham Plan Verileri"}
+            </h2>
           </div>
           <div className="overflow-x-auto custom-scrollbar">
-            <table className="w-full text-sm text-left">
-              <thead className="text-xs text-slate-400 bg-slate-900 uppercase border-b border-slate-800 hidden md:table-header-group">
-                <tr>
-                  <th className="px-6 py-4 w-[10%]">Saat</th>
-                  <th className="px-6 py-4 w-[15%]">Durum</th>
-                  <th className="px-6 py-4 w-[25%]">Yön & Sapma Tahmini</th>
-                  <th className="px-6 py-4 w-[50%]">Gerekçe / Reasoning</th>
-                </tr>
-              </thead>
-              <tbody className="flex-1 sm:flex-none">
-                {data.hourly_predictions.map((row, idx) => {
-                  const isDeficit = row.forecast_delta_mw > 0;
-                  const isRealizedDeficit = row.realized_delta_mw !== null && row.realized_delta_mw > 0;
-                  
-                  return (
-                    <tr key={idx} className={`flex flex-col flex-no-wrap md:table-row mb-4 md:mb-0 border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors ${row.is_forecast ? 'bg-slate-900/20' : 'bg-transparent opacity-80'}`}>
-                      <td className="px-6 py-4 font-medium text-white whitespace-nowrap">{extractHour(row.hour)}</td>
-                      <td className="px-6 py-4">
-                        {row.is_forecast ? (
-                          <div className="bg-indigo-500/20 text-indigo-400 p-2 rounded-full border border-indigo-500/20 w-fit" title="Tahmin Aşamasında">
-                            <Sparkles className="w-4 h-4"/>
+            {chartTab === "agent" ? (
+              <table className="w-full text-sm text-left">
+                <thead className="text-xs text-slate-400 bg-slate-900 uppercase border-b border-slate-800 hidden md:table-header-group">
+                  <tr>
+                    <th className="px-6 py-4 w-[10%]">Saat</th>
+                    <th className="px-6 py-4 w-[15%]">Durum</th>
+                    <th className="px-6 py-4 w-[25%]">Yön & Sapma Tahmini</th>
+                    <th className="px-6 py-4 w-[50%]">Gerekçe / Reasoning</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.hourly_predictions.map((row, idx) => {
+                    const isDeficit = row.forecast_delta_mw > 0;
+                    const isRealizedDeficit = row.realized_delta_mw !== null && row.realized_delta_mw > 0;
+                    return (
+                      <tr key={idx} className={`flex flex-col flex-no-wrap md:table-row mb-4 md:mb-0 border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors ${row.is_forecast ? 'bg-slate-900/20' : 'bg-transparent opacity-80'}`}>
+                        <td className="px-6 py-4 font-medium text-white whitespace-nowrap">{extractHour(row.hour)}</td>
+                        <td className="px-6 py-4">
+                          {row.is_forecast ? (
+                            <div className="bg-indigo-500/20 text-indigo-400 p-2 rounded-full border border-indigo-500/20 w-fit" title="Tahmin Aşamasında">
+                              <Sparkles className="w-4 h-4"/>
+                            </div>
+                          ) : (
+                            <span className={`px-2 py-1 rounded text-[11px] font-bold tracking-wider w-fit block border ${isRealizedDeficit ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}`}>
+                              GERÇEKLEŞEN: {isRealizedDeficit ? 'AÇIK' : 'FAZLA'}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          {row.is_forecast ? (
+                            <>
+                              <div className={`font-bold ${isDeficit ? 'text-rose-400' : 'text-emerald-400'}`}>{row.forecast_delta_mw} MW</div>
+                              <div className="text-[10px] opacity-70 mt-1">{row.forecast_direction}</div>
+                            </>
+                          ) : (
+                            <div className="flex flex-col gap-1.5 text-xs bg-slate-950/40 p-2 rounded border border-slate-800/80 max-w-[200px]">
+                              <div className="flex justify-between items-center">
+                                <span className="text-slate-500">Tahmin:</span>
+                                <span className="font-semibold text-slate-300">{row.forecast_delta_mw} MW</span>
+                              </div>
+                              <div className="flex justify-between items-center">
+                                <span className="text-slate-500">Gerçek:</span>
+                                <span className="font-semibold text-white">{row.realized_delta_mw} MW</span>
+                              </div>
+                              <div className="flex justify-between items-center border-t border-slate-800/50 pt-1.5 mt-0.5">
+                                <span className="text-slate-500">Fark:</span>
+                                <span className="font-mono text-emerald-400">{Math.abs(Number(row.realized_delta_mw) - row.forecast_delta_mw).toFixed(2)} MW</span>
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 text-slate-300 text-xs w-full max-w-sm md:max-w-xl">
+                          <div className="line-clamp-2 leading-relaxed whitespace-normal" title={row.reasoning}>
+                             {row.reasoning}
                           </div>
-                        ) : (
-                          <span className={`px-2 py-1 rounded text-[11px] font-bold tracking-wider w-fit block border ${isRealizedDeficit ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}`}>
-                            GERÇEKLEŞEN: {isRealizedDeficit ? 'AÇIK' : 'FAZLA'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              /* HAM PLAN TAB TABLE */
+              <table className="w-full text-sm text-left">
+                <thead className="text-xs text-slate-400 bg-slate-900 uppercase border-b border-slate-800 hidden md:table-header-group">
+                  <tr>
+                    <th className="px-6 py-4">Saat</th>
+                    <th className="px-6 py-4">Yük Tahmini (LEP)</th>
+                    <th className="px-6 py-4">Üretim Planı (DPP)</th>
+                    <th className="px-6 py-4">Teorik Fark (LEP − DPP)</th>
+                    <th className="px-6 py-4">Yön</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.hourly_predictions.map((row, idx) => {
+                    const planDelta = row.plan_delta_mw;
+                    const isDeficit = (planDelta ?? 0) > 0;
+                    return (
+                      <tr key={idx} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                        <td className="px-6 py-4 font-medium text-white">{extractHour(row.hour)}</td>
+                        <td className="px-6 py-4 text-slate-300">{row.lep_mw !== null ? `${row.lep_mw} MW` : '—'}</td>
+                        <td className="px-6 py-4 text-slate-300">{row.dpp_mw !== null ? `${row.dpp_mw} MW` : '—'}</td>
+                        <td className="px-6 py-4">
+                          <span className={`font-bold ${isDeficit ? 'text-rose-400' : 'text-emerald-400'}`}>
+                            {planDelta !== null ? `${planDelta} MW` : '—'}
                           </span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        {row.is_forecast ? (
-                          <>
-                            <div className={`font-bold ${isDeficit ? 'text-rose-400' : 'text-emerald-400'}`}>{row.forecast_delta_mw} MW</div>
-                            <div className="text-[10px] opacity-70 mt-1">{row.forecast_direction}</div>
-                          </>
-                        ) : (
-                          <div className="flex flex-col gap-1.5 text-xs bg-slate-950/40 p-2 rounded border border-slate-800/80 max-w-[200px]">
-                            <div className="flex justify-between items-center">
-                              <span className="text-slate-500">Tahmin:</span>
-                              <span className="font-semibold text-slate-300">{row.forecast_delta_mw} MW</span>
-                            </div>
-                            <div className="flex justify-between items-center">
-                              <span className="text-slate-500">Gerçek:</span>
-                              <span className="font-semibold text-white">{row.realized_delta_mw} MW</span>
-                            </div>
-                            <div className="flex justify-between items-center border-t border-slate-800/50 pt-1.5 mt-0.5">
-                              <span className="text-slate-500">Fark (Hata Payı):</span>
-                              <span className="font-mono text-emerald-400">{Math.abs(Number(row.realized_delta_mw) - row.forecast_delta_mw).toFixed(2)} MW</span>
-                            </div>
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 text-slate-300 text-xs w-full max-w-sm md:max-w-xl">
-                        <div className="line-clamp-2 leading-relaxed whitespace-normal" title={row.reasoning}>
-                           {row.reasoning}
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`text-[11px] font-semibold ${isDeficit ? 'text-rose-400' : 'text-emerald-400'}`}>
+                            {planDelta !== null ? (isDeficit ? 'AÇIK' : 'FAZLA') : '—'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       </div>
