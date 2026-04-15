@@ -14,6 +14,12 @@ import {
 } from "recharts";
 import { Activity, Clock, Zap, AlertTriangle, ShieldCheck, ArrowRightLeft, Database, Sparkles, PowerOff, BellRing, Calendar, Info } from "lucide-react";
 
+type ReasonParts = {
+  baseline_mw: number;
+  momentum_mw: number;
+  outage_mw: number;
+};
+
 type HourlyPrediction = {
   hour: string;
   is_forecast: boolean;
@@ -21,6 +27,7 @@ type HourlyPrediction = {
   realized_delta_mw: number | null;
   outage_mw: number;
   reasoning: string;
+  reason_parts?: ReasonParts;
   forecast_direction: string;
   lep_mw: number | null;
   dpp_mw: number | null;
@@ -100,19 +107,21 @@ function OutageTable({ title, rawItems }: { title: string, rawItems: any[] }) {
       </div>
 
       <div className="flex-1 w-full overflow-x-auto">
-        <table className="w-full text-xs text-left min-w-[800px]">
+        <table className="w-full text-xs text-left min-w-[900px]">
           <thead className="text-slate-400 bg-slate-900 border-b border-slate-800">
             <tr>
-              <th className="px-4 py-3 w-1/5">İl / İlçe</th>
-              <th className="px-4 py-3 w-1/5">Zaman Aralığı</th>
-              <th className="px-4 py-3 w-2/5">Sebep</th>
-              <th className="px-4 py-3 text-right">Etkilenen</th>
-              <th className="px-4 py-3 text-right">Yük Kaybı</th>
+              <th className="px-4 py-3">İl / İlçe</th>
+              <th className="px-4 py-3">Arıza Başlangıcı</th>
+              <th className="px-4 py-3">Arıza Bitişi</th>
+              <th className="px-4 py-3">Dağıtım Firması</th>
+              <th className="px-4 py-3 max-w-xs">Sebep</th>
+              <th className="px-4 py-3 text-right">Etkilenen Abone</th>
+              <th className="px-4 py-3 text-right">Yük Kaybı (MW)</th>
             </tr>
           </thead>
           <tbody>
             {paginatedItems.length === 0 ? (
-              <tr><td colSpan={5} className="text-center p-8 text-slate-500">Kesinti Bulunmamaktadır.</td></tr>
+              <tr><td colSpan={7} className="text-center p-8 text-slate-500">Kesinti Bulunmamaktadır.</td></tr>
             ) : paginatedItems.map((r, i) => {
               const isCritical = (r.effectedSubscribers >= 1000) || (r.hourlyLoadAvg >= 10);
               return (
@@ -122,23 +131,33 @@ function OutageTable({ title, rawItems }: { title: string, rawItems: any[] }) {
                     <div className="text-slate-400 text-[10px] mt-0.5">{r.district}</div>
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap">
-                    <div className="text-slate-300">{formatTime(r.startTime)} <span className="opacity-50">-</span> {formatTime(r.endTime)}</div>
-                    <div className="text-[10px] text-slate-400 mt-1">Yayın: <span className="text-slate-500">{formatDateDay(r.date)}</span></div>
-                    <div className="text-[10px] text-slate-500 mt-1">{r.distributionCompanyName?.replace(/_/g, ' ')}</div>
+                    <div className="text-slate-300 font-medium">{formatTime(r.startTime)}</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">{r.startTime ? new Date(r.startTime).toLocaleDateString('tr-TR') : '—'}</div>
                   </td>
-                  <td className="px-4 py-3 text-slate-400 max-w-sm" title={r.reason}>
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <div className="text-slate-300 font-medium">{formatTime(r.endTime)}</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">{r.endTime ? new Date(r.endTime).toLocaleDateString('tr-TR') : '—'}</div>
+                  </td>
+                  <td className="px-4 py-3 text-slate-500 text-[10px]">
+                    {r.distributionCompanyName?.replace(/_/g, ' ')}
+                  </td>
+                  <td className="px-4 py-3 text-slate-400 max-w-xs" title={r.reason}>
                     <div className="line-clamp-2 leading-relaxed">{r.reason}</div>
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className={`font-semibold ${r.effectedSubscribers > 0 ? 'text-orange-400' : 'text-slate-500'}`}>
-                      {r.effectedSubscribers ? r.effectedSubscribers.toLocaleString('tr-TR') : "-"}
+                      {r.effectedSubscribers ? r.effectedSubscribers.toLocaleString('tr-TR') : '—'}
                     </div>
-                    <div className="text-[10px] text-slate-500">Abone</div>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <div className={`font-bold ${r.hourlyLoadAvg > 0 ? 'text-rose-400' : 'text-slate-600'}`}>
-                      {r.hourlyLoadAvg ? `${r.hourlyLoadAvg} MW` : "-"}
-                    </div>
+                    {r.hourlyLoadAvg > 0 ? (
+                      <div>
+                        <div className="font-bold text-rose-400">{r.hourlyLoadAvg} MW</div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">saatlik ort.</div>
+                      </div>
+                    ) : (
+                      <span className="text-slate-600">—</span>
+                    )}
                   </td>
                 </tr>
               );
@@ -612,10 +631,34 @@ export default function Dashboard() {
                             </div>
                           )}
                         </td>
-                        <td className="px-6 py-4 text-slate-300 text-xs w-full max-w-sm md:max-w-xl">
-                          <div className="line-clamp-2 leading-relaxed whitespace-normal" title={row.reasoning}>
-                             {row.reasoning}
-                          </div>
+                        <td className="px-6 py-4 text-xs">
+                          {row.reason_parts ? (
+                            <div className="flex flex-col gap-1.5">
+                              <div className="flex items-center gap-2">
+                                <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0"></span>
+                                <span className="text-slate-500 w-24 shrink-0">Tarihsel:</span>
+                                <span className={`font-mono font-semibold ${row.reason_parts.baseline_mw > 0 ? 'text-rose-400' : row.reason_parts.baseline_mw < 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                                  {row.reason_parts.baseline_mw > 0 ? '+' : ''}{row.reason_parts.baseline_mw} MW
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>
+                                <span className="text-slate-500 w-24 shrink-0">Momentum:</span>
+                                <span className={`font-mono font-semibold ${row.reason_parts.momentum_mw > 0 ? 'text-rose-400' : row.reason_parts.momentum_mw < 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                                  {row.reason_parts.momentum_mw > 0 ? '+' : ''}{row.reason_parts.momentum_mw} MW
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="w-2 h-2 rounded-full bg-orange-500 shrink-0"></span>
+                                <span className="text-slate-500 w-24 shrink-0">Arıza:</span>
+                                <span className={`font-mono font-semibold ${row.reason_parts.outage_mw > 0 ? 'text-orange-400' : 'text-slate-400'}`}>
+                                  +{row.reason_parts.outage_mw} MW
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-slate-400 italic">{row.reasoning}</div>
+                          )}
                         </td>
                       </tr>
                     );

@@ -299,35 +299,27 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
             p["plan_delta_mw"] = None
         
         # --- AÇIKLAMA / GEREKÇE (REASONING) OLUŞTURMA ---
-        reasons = []
-        
-        # 1. Arıza Etkisi
-        if p["outage_mw"] > 0:
-            reasons.append(f"Bu saatte {p['outage_mw']:.0f} MW arıza/kesinti etkisi var")
-            
-        # 2. Momentum Etkisi (Saatlik)
-        if abs(momentum) > 200:
-            trend_type = "açık" if momentum > 0 else "fazla"
-            reasons.append(f"Saatlik momentum {abs(round(momentum))} MW {trend_type} yönünde")
-        elif abs(momentum) > 50:
-            trend_type = "açık" if momentum > 0 else "fazla"
-            reasons.append(f"Hafif {trend_type} eğilimi ({abs(round(momentum))} MW)")
-            
-        # 3. Tarihsel Profil (Baseline) Etkisi
-        if base > 500:
-            reasons.append(f"Tarihsel profil bu saatte {abs(round(base))} MW açık gösteriyor")
-        elif base > 200:
-            reasons.append(f"Tarihsel profil hafif açık ({abs(round(base))} MW)")
-        elif base < -500:
-            reasons.append(f"Tarihsel profil bu saatte {abs(round(base))} MW fazla gösteriyor")
-        elif base < -200:
-            reasons.append(f"Tarihsel profil hafif fazla ({abs(round(base))} MW)")
-            
-        # Eğer yukarıdaki belirgin sapmalar yoksa
-        if not reasons:
-            reasons.append("İstikrarlı seyir, belirgin sapma yok")
+        # Her bileşen ayrı ayrı sunuluyor (strukturel veri)
+        reason_parts = {
+            "baseline_mw": round(base, 2),
+            "momentum_mw": round(momentum, 2),
+            "outage_mw": round(p["outage_mw"], 2),
+        }
+        p["reason_parts"] = reason_parts
 
-        p["reasoning"] = " | ".join(reasons)
+        # Kısa metin gerekçe (fallback / ek özet)
+        summary_parts = []
+        if abs(base) > 200:
+            direction_base = "açık" if base > 0 else "fazla"
+            summary_parts.append(f"Tarihsel profil: {abs(round(base))} MW {direction_base}")
+        if abs(momentum) > 50:
+            direction_mom = "açık" if momentum > 0 else "fazla"
+            summary_parts.append(f"Momentum: {abs(round(momentum))} MW {direction_mom}")
+        if p["outage_mw"] > 0:
+            summary_parts.append(f"Arıza: {p['outage_mw']:.0f} MW")
+        if not summary_parts:
+            summary_parts.append("İstikrarlı seyir")
+        p["reasoning"] = " | ".join(summary_parts)
 
     return {
         "historical_baselines_mw": {k: round(v, 2) for k, v in baselines_mw.items()},
