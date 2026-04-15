@@ -187,6 +187,8 @@ export default function Dashboard() {
   const [dpp, setDpp] = useState<ApiResult<any>>({ data: null, error: null });
   const [finance, setFinance] = useState<ApiResult<any>>({ data: null, error: null });
   const [outages, setOutages] = useState<ApiResult<any>>({ data: null, error: null });
+  const [chartTab, setChartTab] = useState<"agent" | "plan">("agent");
+  const [showChartInfo, setShowChartInfo] = useState(false);
 
   const notifiedRef = useRef<Set<number>>(new Set());
   const isInitialLoadRef = useRef(true);
@@ -430,8 +432,6 @@ export default function Dashboard() {
     );
   };
 
-  const [chartTab, setChartTab] = useState<"agent" | "plan">("agent");
-  const [showChartInfo, setShowChartInfo] = useState(false);
 
   const chartInfoTexts: Record<string, string> = {
     agent: "Tarihsel profil (son 3 gün) + saatlik momentum + arıza etkisi kullanılarak hesaplanan AI tahmin modeli. Koyu barlar tahmin, soluk barlar gerçekleşen saatleri temsil eder.",
