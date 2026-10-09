@@ -27,3 +27,4 @@ env/
 data/
 .vercel
 .env*
+.eptr2-tgt

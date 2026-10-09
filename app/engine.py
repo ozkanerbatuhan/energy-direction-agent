@@ -1,19 +1,11 @@
 """
-engine.py — İş mantığı modülü: Enerji Açık / Fazla ve Gelişmiş Tarihsel Tahminleyici.
+engine.py — Türkiye şebekesi saatlik açık / fazla yön tahmini.
 
-Geçmiş (gerçekleşen) saatler için Formül:
-    Delta = (Gerçekleşen Tüketim − Tahmini Tüketim)
-          − (Gerçekleşen Üretim − KGÜP/DPP Üretimi)   [ikisi de güneş hariç]
-          + (Arıza/Kesinti Kayıp MW)
-
-Gelecek saatler için Tahminleme (Forecasting) Formülü:
-    Adım 1: Tarihsel Sapma (Baseline) = Son 3 günün o saate ait sapma ortalaması
-    Adım 2: Saatlik Momentum (H) = Bugün o saate kadar gerçekleşen (Sapma-Baseline) ortalaması
-    Tahmini Delta(H) = Baseline(H) + Momentum(H) + Outage(H)
-
-    Delta > 0  →  AÇIK (DEFICIT)
-    Delta < 0  →  FAZLA (SURPLUS)
-    Delta == 0 →  DENGEDE (BALANCED)
+Hedef büyüklük EPİAŞ'ın gerçekleşen net dengeleme talimatıdır (YAL − YAT):
+    Net > 0  →  AÇIK (DEFICIT)   — TEİAŞ yük aldırdı
+    Net < 0  →  FAZLA (SURPLUS)  — TEİAŞ yük attırdı
+Tahmin = son BASELINE_DAYS günün aynı saatindeki net ortalaması (gerekçe:
+calculate_daily_forecast docstring'i). Fiziksel sapma ve arıza yalnız bilgi amaçlı.
 """
 
 import logging
@@ -23,6 +15,9 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 TZ_ISTANBUL = ZoneInfo("Europe/Istanbul")
+
+# Tahmin tabanı: kaç günün aynı saati ortalanır (backtest: 7 gün en iyi)
+BASELINE_DAYS = 7
 
 
 def _find_value(items: list[dict] | None, hour_key: str, fields: list[str]) -> float | None:
@@ -169,172 +164,102 @@ def _get_direction(delta: float) -> str:
 
 def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | None:
     """
-    Tarihsel Baseline (Son 3 gün) ve Günlük Momentum yöntemini 
-    kullanarak 24 saatlik güncel Delta tahminlemesi yapar.
+    24 saatlik sistem yönü tahmini.
+
+    Hedef: EPİAŞ'ın gerçekleşen net dengeleme talimatı (YAL − YAT, MWh).
+    Pozitif = sistem açık verdi (yük aldırıldı), negatif = fazla (yük attırıldı).
+
+    Tahmin(H) = son BASELINE_DAYS günün aynı saatindeki net talimat ortalaması.
+
+    Neden bu kadar sade: 19 Eyl – 8 Eki 2026 backtest'inde (461 saat)
+      - eski fiziksel formül (tüketim/üretim sapması + momentum + arıza): %47-52 yön isabeti
+      - "hep fazla" demek: %56
+      - 7 günlük net talimat ortalaması: %63, MAE ~550 MWh
+    Momentum ya da fiziksel sapma eklemek isabeti düşürdü; o yüzden yalnız bilgi olarak
+    raporlanır, tahmine girmez. Dağıtım kesintileri (outage) de tüketiciyi düşürdüğü için
+    açık yönünde eklenemez; bilgi olarak kalır.
     """
-    logger.info("KGÜP ve Momentum destekli tahminleme algoritması başlatılıyor...")
+    logger.info("Net talimat tabanlı yön tahmini başlatılıyor...")
 
     if target_date:
         now = datetime.strptime(target_date, "%Y-%m-%d").replace(tzinfo=TZ_ISTANBUL)
     else:
         now = datetime.now(tz=TZ_ISTANBUL)
-        
+
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # 1. API Listelerini Çıkar
+    today_str = today_start.strftime("%Y-%m-%d")
+
     load_items = _extract_items(raw_data.get("load_estimation"))
     cons_items = _extract_items(raw_data.get("realtime_consumption"))
-    gen_items = _extract_items(raw_data.get("realtime_generation"))
+    gen_items  = _extract_items(raw_data.get("realtime_generation"))
     dpp_items  = _extract_items(raw_data.get("dpp"))
     outages    = raw_data.get("outages")
 
-    # Finansallar Listeleri
-    finance_raw = raw_data.get("finance", {})
-    k_ptf_items = _extract_items(finance_raw.get("k_ptf"))
-    smf_items = _extract_items(finance_raw.get("smf"))
-    yat_items = _extract_items(finance_raw.get("yat"))
+    finance_raw = raw_data.get("finance", {}) or {}
     yal_items = _extract_items(finance_raw.get("yal"))
     sys_dir_items = _extract_items(finance_raw.get("system_direction"))
 
-    # ---------------------------------------------------------
-    # ADIM 1: Tarihsel Profil (Baseline) Çıkarma
-    # ---------------------------------------------------------
-    # Bugün haricinde geçmiş 3 günün (today-3, today-2, today-1) 
-    # saatlik sapmalarını hesaplayıp ortalamasını (Baseline) buluyoruz.
-    past_days = [today_start - timedelta(days=d) for d in range(3, 0, -1)]
-    baselines_mw = {}
+    def net_at(key: str) -> float | None:
+        return _find_value(yal_items, key, ["net"])
 
+    def physical_at(key: str) -> float | None:
+        """Güneş hariç fiziksel sapma: (Tüketim − LEP) − (Üretim − KGÜP)."""
+        r_cons = _find_value(cons_items, key, ["consumption", "value"])
+        e_cons = _find_value(load_items, key, ["lep", "llesValue", "value"])
+        r_gen  = _non_solar(gen_items, key, ["total", "value"], ["sun"])
+        d_gen  = _non_solar(dpp_items, key, ["toplam", "total", "value"], ["gunes"])
+        if None in (r_cons, e_cons, r_gen, d_gen):
+            return None
+        return (r_cons - e_cons) - (r_gen - d_gen)
+
+    past_days = [today_start - timedelta(days=d) for d in range(1, BASELINE_DAYS + 1)]
+    baselines_mw: dict[str, float] = {}
+    baseline_counts: dict[str, int] = {}
     for h in range(24):
         hour_str = f"{h:02d}"
-        deviations_for_h = []
-        
-        for p_day in past_days:
-            p_key = p_day.strftime("%Y-%m-%d") + f"T{hour_str}"
-            
-            r_cons = _find_value(cons_items, p_key, ["consumption", "value"])
-            e_cons = _find_value(load_items, p_key, ["lep", "llesValue", "value"])
-            r_gen  = _non_solar(gen_items, p_key, ["total", "value"], ["sun"])
-            d_gen  = _non_solar(dpp_items, p_key, ["toplam", "total", "value"], ["gunes"])
-            
-            # Eğer o saate ait tüm veriler varsa dahil et
-            if r_cons is not None and e_cons is not None and r_gen is not None:
-                d_gen = d_gen if d_gen is not None else r_gen
-                dev = (r_cons - e_cons) - (r_gen - d_gen)
-                deviations_for_h.append(dev)
-                
-        if deviations_for_h:
-            avg_dev = sum(deviations_for_h) / len(deviations_for_h)
-        else:
-            avg_dev = 0.0
-            
-        baselines_mw[hour_str] = avg_dev
+        keys = [d.strftime("%Y-%m-%d") + f"T{hour_str}" for d in past_days]
+        vals = [net_at(k) for k in keys if _find_string(sys_dir_items, k, ["systemDirection"])]
+        vals = [v for v in vals if v is not None]
+        baselines_mw[hour_str] = sum(vals) / len(vals) if vals else 0.0
+        baseline_counts[hour_str] = len(vals)
 
-    # ---------------------------------------------------------
-    # ADIM 2: Bugünün Sapmaları ve Saatlik Momentum Hesabı
-    # ---------------------------------------------------------
-    today_str = today_start.strftime("%Y-%m-%d")
-    cumulative_diffs = []  # Her saat için kendi momentumu hesaplanacak
     hourly_predictions = []
-
     for h in range(24):
         hour_str = f"{h:02d}"
         t_key = f"{today_str}T{hour_str}"
-        
-        r_cons = _find_value(cons_items, t_key, ["consumption", "value"])
-        e_cons = _find_value(load_items, t_key, ["lep", "llesValue", "value"])
-        r_gen  = _non_solar(gen_items, t_key, ["total", "value"], ["sun"])
-        d_gen  = _non_solar(dpp_items, t_key, ["toplam", "total", "value"], ["gunes"])
+
+        base = baselines_mw[hour_str]
+        # EPİAŞ yayınlamadığı saatler için net=0 döndürüyor; gerçekleşen sayılması için yön de yayınlanmış olmalı
+        epias_dir = _find_string(sys_dir_items, t_key, ["systemDirection"])
+        realized = net_at(t_key) if epias_dir else None
+        physical = physical_at(t_key)
         outage = _calculate_outage_mw(outages, t_key)
-        
-        # Ham plan verileri (LEP & DPP) — Tab 2 için
         lep_val = _find_value(load_items, t_key, ["lep", "llesValue", "value"])
         dpp_val = _find_value(dpp_items, t_key, ["toplam", "total", "value"])
-        
-        e_cons = e_cons or 0.0
-        
-        if r_cons is not None and r_gen is not None:
-            # Gerçekleşen saat
-            d_gen = d_gen if d_gen is not None else r_gen
-            today_dev = (r_cons - e_cons) - (r_gen - d_gen)
-            
-            # Formül mantığı: Gerçekleşmiş Delta = T_Dev + Outage
-            delta = today_dev + outage
-            
-            # Saatlik momentum: Bu saate kadar biriken farkların ortalaması
-            base_val = baselines_mw.get(hour_str, 0.0)
-            diff = today_dev - base_val
-            cumulative_diffs.append(diff)
-            hourly_momentum = sum(cumulative_diffs) / len(cumulative_diffs)
-            
-            hourly_predictions.append({
-                "hour": t_key,
-                "is_forecast": False,
-                "realized_delta_mw": round(delta, 2),
-                "outage_mw": outage,
-                "_base": base_val,
-                "_momentum": hourly_momentum,
-                "lep_mw": round(lep_val, 2) if lep_val is not None else None,
-                "dpp_mw": round(dpp_val, 2) if dpp_val is not None else None,
-            })
-            
-        else:
-            # Henüz gerçekleşmemiş (Gelecek) saat — son bilinen momentumla devam et
-            latest_momentum = cumulative_diffs[-1] if cumulative_diffs else 0.0
-            if cumulative_diffs:
-                latest_momentum = sum(cumulative_diffs) / len(cumulative_diffs)
-            
-            hourly_predictions.append({
-                "hour": t_key,
-                "is_forecast": True,
-                "realized_delta_mw": None,
-                "outage_mw": outage,
-                "_base": baselines_mw.get(hour_str, 0.0),
-                "_momentum": latest_momentum,
-                "lep_mw": round(lep_val, 2) if lep_val is not None else None,
-                "dpp_mw": round(dpp_val, 2) if dpp_val is not None else None,
-            })
 
-    # ---------------------------------------------------------
-    # ADIM 3: Tüm Saatlerin Teorik Tahmini ve Gerekçe (Reasoning)
-    # ---------------------------------------------------------
-    for p in hourly_predictions:
-        t_key = p["hour"]
-        base = p.pop("_base", 0.0)
-        momentum = p.pop("_momentum", 0.0)
+        reason = f"Son {baseline_counts[hour_str]} gün bu saat: ort. {abs(round(base))} MWh " + (
+            "açık" if base > 0 else "fazla" if base < 0 else "denge")
 
-        # Tahmini Delta = Geçmiş Profil (Baseline) + Saatlik Momentum + Arızalar
-        forecast_delta = base + momentum + p["outage_mw"]
-        p["forecast_delta_mw"] = round(forecast_delta, 2)
-        p["forecast_direction"] = _get_direction(forecast_delta)
-        
-        # Ham Plan Farkı (LEP - DPP)
-        if p["lep_mw"] is not None and p["dpp_mw"] is not None:
-            p["plan_delta_mw"] = round(p["lep_mw"] - p["dpp_mw"], 2)
-        else:
-            p["plan_delta_mw"] = None
-        
-        # --- AÇIKLAMA / GEREKÇE (REASONING) OLUŞTURMA ---
-        # Her bileşen ayrı ayrı sunuluyor (strukturel veri)
-        reason_parts = {
-            "baseline_mw": round(base, 2),
-            "momentum_mw": round(momentum, 2),
-            "outage_mw": round(p["outage_mw"], 2),
-        }
-        p["reason_parts"] = reason_parts
-
-        # Kısa metin gerekçe (fallback / ek özet)
-        summary_parts = []
-        if abs(base) > 200:
-            direction_base = "açık" if base > 0 else "fazla"
-            summary_parts.append(f"Tarihsel profil: {abs(round(base))} MW {direction_base}")
-        if abs(momentum) > 50:
-            direction_mom = "açık" if momentum > 0 else "fazla"
-            summary_parts.append(f"Momentum: {abs(round(momentum))} MW {direction_mom}")
-        if p["outage_mw"] > 0:
-            summary_parts.append(f"Arıza: {p['outage_mw']:.0f} MW")
-        if not summary_parts:
-            summary_parts.append("İstikrarlı seyir")
-        p["reasoning"] = " | ".join(summary_parts)
+        hourly_predictions.append({
+            "hour": t_key,
+            "is_forecast": realized is None,
+            "forecast_delta_mw": round(base, 2),
+            "forecast_direction": _get_direction(base),
+            "realized_delta_mw": round(realized, 2) if realized is not None else None,
+            "realized_direction": epias_dir,
+            "physical_delta_mw": round(physical, 2) if physical is not None else None,
+            "outage_mw": outage,
+            "lep_mw": round(lep_val, 2) if lep_val is not None else None,
+            "dpp_mw": round(dpp_val, 2) if dpp_val is not None else None,
+            "plan_delta_mw": round(lep_val - dpp_val, 2) if lep_val is not None and dpp_val is not None else None,
+            "reason_parts": {
+                "baseline_mw": round(base, 2),
+                "baseline_days": baseline_counts[hour_str],
+                "physical_mw": round(physical, 2) if physical is not None else None,
+                "outage_mw": round(outage, 2),
+            },
+            "reasoning": reason,
+        })
 
     return {
         "historical_baselines_mw": {k: round(v, 2) for k, v in baselines_mw.items()},

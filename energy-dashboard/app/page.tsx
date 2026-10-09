@@ -16,7 +16,8 @@ import { Activity, Clock, Zap, AlertTriangle, ShieldCheck, ArrowRightLeft, Datab
 
 type ReasonParts = {
   baseline_mw: number;
-  momentum_mw: number;
+  baseline_days: number;
+  physical_mw: number | null;
   outage_mw: number;
 };
 
@@ -25,6 +26,8 @@ type HourlyPrediction = {
   is_forecast: boolean;
   forecast_delta_mw: number;
   realized_delta_mw: number | null;
+  realized_direction?: string | null;
+  physical_delta_mw?: number | null;
   outage_mw: number;
   reasoning: string;
   reason_parts?: ReasonParts;
@@ -453,7 +456,7 @@ export default function Dashboard() {
 
 
   const chartInfoTexts: Record<string, string> = {
-    agent: "Tarihsel profil (son 3 gün) + saatlik momentum + arıza etkisi kullanılarak hesaplanan AI tahmin modeli. Koyu barlar tahmin, soluk barlar gerçekleşen saatleri temsil eder.",
+    agent: "Tahmin: son 7 günün aynı saatinde EPİAŞ'ın verdiği net dengeleme talimatının (YAL − YAT) ortalaması. Gerçekleşen: EPİAŞ'ın yayınladığı net talimat (birkaç saat gecikmeli). Pozitif = açık, negatif = fazla.",
     plan: "EPİAŞ Yük Tahmin Planı (LEP) ile Kesinleşmiş Gün Öncesi Üretim Planı (DPP) arasındaki ham fark. Piyasanın AI katmanı olmadan teorik beklentisini gösterir."
   };
 
@@ -650,23 +653,23 @@ export default function Dashboard() {
                             <div className="flex flex-col gap-1.5">
                               <div className="flex items-center gap-2">
                                 <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0"></span>
-                                <span className="text-slate-500 w-24 shrink-0">Tarihsel:</span>
+                                <span className="text-slate-500 w-24 shrink-0">{row.reason_parts.baseline_days} gün ort.:</span>
                                 <span className={`font-mono font-semibold ${row.reason_parts.baseline_mw > 0 ? 'text-rose-400' : row.reason_parts.baseline_mw < 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
                                   {row.reason_parts.baseline_mw > 0 ? '+' : ''}{row.reason_parts.baseline_mw} MW
                                 </span>
                               </div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2" title="Bilgi amaçlı, tahmine girmez">
                                 <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>
-                                <span className="text-slate-500 w-24 shrink-0">Momentum:</span>
-                                <span className={`font-mono font-semibold ${row.reason_parts.momentum_mw > 0 ? 'text-rose-400' : row.reason_parts.momentum_mw < 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
-                                  {row.reason_parts.momentum_mw > 0 ? '+' : ''}{row.reason_parts.momentum_mw} MW
+                                <span className="text-slate-500 w-24 shrink-0">Fiziksel (bilgi):</span>
+                                <span className="font-mono text-slate-400">
+                                  {row.reason_parts.physical_mw === null ? '—' : `${row.reason_parts.physical_mw > 0 ? '+' : ''}${row.reason_parts.physical_mw} MW`}
                                 </span>
                               </div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2" title="Dağıtım kesintileri; bilgi amaçlı, tahmine girmez">
                                 <span className="w-2 h-2 rounded-full bg-orange-500 shrink-0"></span>
-                                <span className="text-slate-500 w-24 shrink-0">Arıza:</span>
-                                <span className={`font-mono font-semibold ${row.reason_parts.outage_mw > 0 ? 'text-orange-400' : 'text-slate-400'}`}>
-                                  +{row.reason_parts.outage_mw} MW
+                                <span className="text-slate-500 w-24 shrink-0">Kesinti (bilgi):</span>
+                                <span className="font-mono text-slate-400">
+                                  {row.reason_parts.outage_mw} MW
                                 </span>
                               </div>
                             </div>

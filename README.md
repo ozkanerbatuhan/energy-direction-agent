@@ -36,22 +36,28 @@ An AI-powered forecasting dashboard that predicts whether the Turkish electricit
 
 ## 🧠 Forecasting Engine
 
-The core prediction model computes an **hourly delta (MW)** — the expected imbalance between electricity consumption and generation — using a three-component formula:
+The target is EPİAŞ's realized **net balancing instruction** (YAL − YAT, MWh) per hour:
+
+- `Net > 0` → Grid was **AÇIK (DEFICIT)** — TEİAŞ ordered up-regulation
+- `Net < 0` → Grid was **FAZLA (SURPLUS)** — TEİAŞ ordered down-regulation
 
 ```
-Forecast_Delta(h) = Baseline(h) + Momentum(h) + Outage(h)
+Forecast(h) = mean of Net(h) over the past 7 days
 ```
 
-| Component | Description |
-|-----------|-------------|
-| **Baseline(h)** | Average deviation for hour `h` across the past 3 days (historical pattern) |
-| **Momentum(h)** | Rolling average of today's divergence from baseline up to hour `h` (intra-day trend) |
-| **Outage(h)** | Total MW capacity loss from active planned/unplanned grid outages at hour `h` |
+Backtest, 19 Sep – 8 Oct 2026 (461 hours), direction hit rate:
 
-- `Delta > 0` → Grid is **AÇIK (DEFICIT)** — consumption exceeds generation
-- `Delta < 0` → Grid is **FAZLA (SURPLUS)** — generation exceeds consumption
+| Model | Hit rate | MAE |
+|---|---|---|
+| Old physical formula (consumption/generation deviation + momentum + outages) | 46.6% | 4213 MWh |
+| Same, solar excluded | 51.6% | 1377 MWh |
+| Always "surplus" | 56.4% | 563 MWh |
+| **7-day net instruction mean (current)** | **63.3%** | **552 MWh** |
 
-Each hour's forecast comes with a structured breakdown showing exactly **how much each component contributed** in MW.
+The old formula subtracted realtime generation (only metered, licensed PV ≈ 3 GW) from KGÜP
+(all PV incl. unlicensed ≈ 15–19 GW), which showed a fake ~13 GW "deficit" every midday.
+Adding momentum or the physical deviation lowered the hit rate, so they are reported for
+information only. Distribution outages lower consumption, so they are not a deficit term.
 
 ---
 
