@@ -35,6 +35,12 @@ async def fetch_and_process() -> None:
 
     # 1 — Veri çek
     raw_data = await fetch_all_data()
+    # TGT yenilemesi başarısız olursa eski bilet süresi dolunca tüm istekler sessizce None döner;
+    # bir sonraki 90 dk'lık yenilemeyi beklemeden burada yenileyip tekrar dene.
+    if not raw_data or not raw_data.get("realtime_consumption"):
+        logger.warning("Veri eksik geldi — TGT yenilenip tekrar deneniyor.")
+        await refresh_tgt()
+        raw_data = await fetch_all_data()
     if not raw_data:
         logger.warning("Veri çekilemedi — işlem atlanıyor.")
         return

@@ -14,6 +14,9 @@ import {
 } from "recharts";
 import { Activity, Clock, Zap, AlertTriangle, ShieldCheck, ArrowRightLeft, Database, Sparkles, PowerOff, BellRing, Calendar, Info } from "lucide-react";
 
+// YYYY-MM-DD, İstanbul saatine göre. toISOString() UTC verir: 00:00–03:00 arası dünü seçiyordu.
+const trDate = (d: Date = new Date()) => d.toLocaleDateString("sv-SE", { timeZone: "Europe/Istanbul" });
+
 type ReasonParts = {
   baseline_mw: number;
   baseline_days: number;
@@ -196,7 +199,7 @@ export default function Dashboard() {
 
   // Format YYYY-MM-DD
   const [selectedDate, setSelectedDate] = useState<string>(
-    new Date().toISOString().substring(0, 10)
+    trDate()
   );
 
   const [data, setData] = useState<PredictionResponse | null>(null);
@@ -226,7 +229,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (!outages.data || outages.data.status === "waiting") return;
     
-    const todayStr = new Date().toISOString().substring(0, 10);
+    const todayStr = trDate();
     const isToday = selectedDate === todayStr;
 
     const planned = outages.data.planned?.items || [];
@@ -324,7 +327,7 @@ export default function Dashboard() {
   useEffect(() => {
     fetchData();
     // Only auto-poll if we are on today's date
-    const todayStr = new Date().toISOString().substring(0, 10);
+    const todayStr = trDate();
     if (selectedDate === todayStr) {
       const interval = setInterval(fetchData, 30000);
       return () => clearInterval(interval);
@@ -457,7 +460,7 @@ export default function Dashboard() {
 
   const chartInfoTexts: Record<string, string> = {
     agent: "Tahmin: son 7 günün aynı saatinde EPİAŞ'ın verdiği net dengeleme talimatının (YAL − YAT) ortalaması. Gerçekleşen: EPİAŞ'ın yayınladığı net talimat (birkaç saat gecikmeli). Pozitif = açık, negatif = fazla.",
-    plan: "EPİAŞ Yük Tahmin Planı (LEP) ile Kesinleşmiş Gün Öncesi Üretim Planı (DPP) arasındaki ham fark. Piyasanın AI katmanı olmadan teorik beklentisini gösterir."
+    plan: "EPİAŞ Yük Tahmin Planı (LEP) ile Kesinleşmiş Gün Öncesi Üretim Planı (DPP) arasındaki ham fark. Yön göstergesi değildir: DPP ithalatı ve bazı üretimi kapsamadığı için fark yapısal olarak ~+1,5 GW kayıktır (19 Eyl – 8 Eki: saatlerin %97'si pozitif, gerçek yönle isabet %47)."
   };
 
   const renderPredictionTab = () => {
@@ -742,7 +745,7 @@ export default function Dashboard() {
             {/* Global Date Picker */}
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setSelectedDate(new Date().toISOString().substring(0, 10))}
+                onClick={() => setSelectedDate(trDate())}
                 className="text-xs font-medium px-3 py-2 bg-slate-800/50 hover:bg-slate-700 text-slate-300 rounded-lg transition-colors border border-slate-700 hover:border-slate-600"
               >
                 Bugün
@@ -754,8 +757,8 @@ export default function Dashboard() {
                 <input 
                   type="date"
                   value={selectedDate}
-                  min={new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().substring(0, 10)}
-                  max={new Date().toISOString().substring(0, 10)}
+                  min={trDate(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))}
+                  max={trDate()}
                   onChange={(e) => setSelectedDate(e.target.value)}
                   className="bg-transparent text-sm text-slate-200 outline-none px-3 py-2 cursor-pointer [&::-webkit-calendar-picker-indicator]:opacity-50 [&::-webkit-calendar-picker-indicator]:hover:opacity-100"
                 />

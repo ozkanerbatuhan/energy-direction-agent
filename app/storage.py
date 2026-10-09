@@ -14,6 +14,9 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Önbellek biçimi değişince artır; eski sürümdeki dosyalar okunmaz (ör. 3 günlük pencere, eski K.PTF).
+HISTORY_SCHEMA = 2
+
 
 def _data_path() -> Path:
     """data.json yolunu Path nesnesi olarak döndürür."""
@@ -83,6 +86,8 @@ async def read_history_cache(date_str: str) -> dict | None:
         wrapper["last_accessed"] = time.time()
         path.write_text(json.dumps(wrapper, ensure_ascii=False), encoding="utf-8")
         
+        if wrapper.get("schema") != HISTORY_SCHEMA:
+            return None
         return wrapper.get("payload")
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning(f"Geçmiş önbellek ({date_str}) okunamadı: {exc}")
@@ -98,8 +103,18 @@ async def write_history_cache(date_str: str, raw_data: dict) -> None:
         logger.warning(f"{date_str} için veriler eksik (Muhtemel 429 hatası) — Önbelleğe alınmıyor.")
         return
 
+    # EPİAŞ dengeleme verisini saatler sonra yayınlıyor; gün tamamlanmadan önbelleğe alınırsa
+    # eksik hâli kalıcı olur (her okuma last_accessed'i yenilediği için hiç silinmez).
+    directions = ((raw_data.get("finance") or {}).get("system_direction") or {}).get("items") or []
+    published = {i.get("date", "")[:13] for i in directions
+                 if i.get("systemDirection") and i.get("date", "").startswith(date_str)}
+    if len(published) < 24:
+        logger.info(f"{date_str} henüz tamamlanmadı ({len(published)}/24 saat yön) — önbelleğe alınmıyor.")
+        return
+
     path = _history_path(date_str)
     wrapper = {
+        "schema": HISTORY_SCHEMA,
         "last_accessed": time.time(),
         "payload": raw_data
     }
