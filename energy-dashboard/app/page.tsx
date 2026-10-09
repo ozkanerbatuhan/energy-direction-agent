@@ -618,6 +618,7 @@ export default function Dashboard() {
                   {data.hourly_predictions.map((row, idx) => {
                     const isDeficit = row.forecast_delta_mw > 0;
                     const isRealizedDeficit = row.realized_delta_mw !== null && row.realized_delta_mw > 0;
+                    const isRealizedBalanced = row.realized_delta_mw === 0;
                     return (
                       <tr key={idx} className={`flex flex-col flex-no-wrap md:table-row mb-4 md:mb-0 border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors ${row.is_forecast ? 'bg-slate-900/20' : 'bg-transparent opacity-80'}`}>
                         <td className="px-6 py-4 font-medium text-white whitespace-nowrap">{extractHour(row.hour)}</td>
@@ -627,8 +628,8 @@ export default function Dashboard() {
                               <Sparkles className="w-4 h-4"/>
                             </div>
                           ) : (
-                            <span className={`px-2 py-1 rounded text-[11px] font-bold tracking-wider w-fit block border ${isRealizedDeficit ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}`}>
-                              GERÇEKLEŞEN: {isRealizedDeficit ? 'AÇIK' : 'FAZLA'}
+                            <span className={`px-2 py-1 rounded text-[11px] font-bold tracking-wider w-fit block border ${isRealizedBalanced ? 'bg-slate-500/10 text-slate-300 border-slate-500/20' : isRealizedDeficit ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}`}>
+                              GERÇEKLEŞEN: {isRealizedBalanced ? 'DENGEDE' : isRealizedDeficit ? 'AÇIK' : 'FAZLA'}
                             </span>
                           )}
                         </td>
