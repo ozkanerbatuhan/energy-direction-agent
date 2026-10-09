@@ -60,8 +60,9 @@ EPIAS_DPP_PATH = "/electricity-service/v1/generation/data/dpp"
 EPIAS_PLANNED_OUTAGE_PATH = "/electricity-service/v1/consumption/data/planned-power-outage-info"
 EPIAS_UNPLANNED_OUTAGE_PATH = "/electricity-service/v1/consumption/data/unplanned-power-outage-info"
 
-# K.PTF (Kesinleşmemiş Piyasa Takas Fiyatı)
-EPIAS_KPTF_PATH = "/electricity-service/v1/markets/dam/data/interim-mcp"
+# PTF (Piyasa Takas Fiyatı). interim-mcp (K.PTF) yalnız startDate gününü
+# döndürüyor; mcp tarih aralığını destekliyor ve ertesi günün fiyatı da gün öncesinden yayında.
+EPIAS_KPTF_PATH = "/electricity-service/v1/markets/dam/data/mcp"
 
 # SMF (Sistem Marjinal Fiyatı)
 EPIAS_SMF_PATH = "/electricity-service/v1/markets/bpm/data/system-marginal-price"

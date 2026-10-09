@@ -346,7 +346,7 @@ export default function Dashboard() {
     );
   }
 
-  const renderTableBlock = (title: string, dataObj: ApiResult<any>, columns: {header: string, dataKey: string, isTotal?: boolean}[], listProp = "items") => {
+  const renderTableBlock = (title: string, dataObj: ApiResult<any>, columns: {header: string, dataKey: string, isTotal?: boolean, isText?: boolean}[], listProp = "items") => {
     if (dataObj.error) return <div className="bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden p-6 text-rose-400">{title} Verisi Alınamadı: {dataObj.error}</div>;
     if (dataObj.data?.status === "waiting" || dataObj.data?.error) {
       return <div className="bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden p-6 text-slate-400">{title}: {dataObj.data?.message || dataObj.data?.error || 'Bekleniyor...'}</div>;
@@ -380,7 +380,7 @@ export default function Dashboard() {
                     <td className="px-4 py-2.5 text-slate-300 font-medium">{hourObj}</td>
                     {columns.map((c, idx) => (
                       <td key={idx} className={`px-4 py-2.5 text-right font-semibold ${c.isTotal ? 'text-emerald-400' : 'text-slate-300 opacity-90'}`}>
-                        {r[c.dataKey] !== undefined && r[c.dataKey] !== null ? Number(r[c.dataKey]).toLocaleString("tr-TR", {maximumFractionDigits: 2}) : "-"}
+                        {r[c.dataKey] === undefined || r[c.dataKey] === null ? "-" : c.isText ? String(r[c.dataKey]) : Number(r[c.dataKey]).toLocaleString("tr-TR", {maximumFractionDigits: 2})}
                       </td>
                     ))}
                   </tr>
@@ -411,11 +411,11 @@ export default function Dashboard() {
 
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
-        {renderFinNode("K.PTF", fin.k_ptf?.items || [], [{header: 'Fiyat (₺)', dataKey: 'price', isTotal: true}])}
-        {renderFinNode("SMF", fin.smf?.items || [], [{header: 'Fiyat (₺)', dataKey: 'price', isTotal: true}])}
-        {renderFinNode("YAT", fin.yat?.items || [], [{header: 'Miktar (MWh)', dataKey: 'downRegulation', isTotal: true}])}
-        {renderFinNode("YAL", fin.yal?.items || [], [{header: 'Miktar (MWh)', dataKey: 'upRegulation', isTotal: true}])}
-        {renderFinNode("Yön", fin.system_direction?.items || [], [{header: 'Yön', dataKey: 'systemDirection', isTotal: true}])}
+        {renderFinNode("PTF", fin.k_ptf?.items || [], [{header: 'Fiyat (₺)', dataKey: 'price', isTotal: true}])}
+        {renderFinNode("SMF", fin.smf?.items || [], [{header: 'Fiyat (₺)', dataKey: 'systemMarginalPrice', isTotal: true}])}
+        {renderFinNode("YAT", fin.yat?.items || [], [{header: 'Miktar (MWh)', dataKey: 'downRegulationDelivered', isTotal: true}])}
+        {renderFinNode("YAL", fin.yal?.items || [], [{header: 'Miktar (MWh)', dataKey: 'upRegulationDelivered', isTotal: true}])}
+        {renderFinNode("Yön", fin.system_direction?.items || [], [{header: 'Yön', dataKey: 'systemDirection', isTotal: true, isText: true}])}
       </div>
     );
   };

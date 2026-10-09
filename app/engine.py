@@ -3,7 +3,7 @@ engine.py — İş mantığı modülü: Enerji Açık / Fazla ve Gelişmiş Tari
 
 Geçmiş (gerçekleşen) saatler için Formül:
     Delta = (Gerçekleşen Tüketim − Tahmini Tüketim)
-          − (Gerçekleşen Üretim − KGÜP/DPP Üretimi)
+          − (Gerçekleşen Üretim − KGÜP/DPP Üretimi)   [ikisi de güneş hariç]
           + (Arıza/Kesinti Kayıp MW)
 
 Gelecek saatler için Tahminleme (Forecasting) Formülü:
@@ -63,6 +63,21 @@ def _find_string(items: list[dict] | None, hour_key: str, fields: list[str]) -> 
                 if val is not None:
                     return str(val).strip()
     return None
+
+
+def _non_solar(items: list[dict] | None, hour_key: str, total_fields: list[str], sun_fields: list[str]) -> float | None:
+    """
+    Toplam üretimden güneşi düşer.
+
+    Gerçek zamanlı üretim yalnız sayacı anlık okunan (lisanslı) GES'leri içerir (~3 GW),
+    KGÜP ise lisanssız GES dahil tüm güneşi (~15-19 GW). İkisi doğrudan çıkarılırsa
+    öğlen güneş eğrisi kadar sahte "açık" doğar; karşılaştırma güneşsiz yapılır.
+    """
+    total = _find_value(items, hour_key, total_fields)
+    if total is None:
+        return None
+    sun = _find_value(items, hour_key, sun_fields) or 0.0
+    return total - sun
 
 
 def _extract_items(response: dict | None) -> list[dict]:
@@ -198,8 +213,8 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
             
             r_cons = _find_value(cons_items, p_key, ["consumption", "value"])
             e_cons = _find_value(load_items, p_key, ["lep", "llesValue", "value"])
-            r_gen  = _find_value(gen_items,  p_key, ["total", "value"])
-            d_gen  = _find_value(dpp_items,  p_key, ["toplam", "total", "value"])
+            r_gen  = _non_solar(gen_items, p_key, ["total", "value"], ["sun"])
+            d_gen  = _non_solar(dpp_items, p_key, ["toplam", "total", "value"], ["gunes"])
             
             # Eğer o saate ait tüm veriler varsa dahil et
             if r_cons is not None and e_cons is not None and r_gen is not None:
@@ -227,8 +242,8 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
         
         r_cons = _find_value(cons_items, t_key, ["consumption", "value"])
         e_cons = _find_value(load_items, t_key, ["lep", "llesValue", "value"])
-        r_gen  = _find_value(gen_items,  t_key, ["total", "value"])
-        d_gen  = _find_value(dpp_items,  t_key, ["toplam", "total", "value"])
+        r_gen  = _non_solar(gen_items, t_key, ["total", "value"], ["sun"])
+        d_gen  = _non_solar(dpp_items, t_key, ["toplam", "total", "value"], ["gunes"])
         outage = _calculate_outage_mw(outages, t_key)
         
         # Ham plan verileri (LEP & DPP) — Tab 2 için

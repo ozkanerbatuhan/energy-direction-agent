@@ -25,3 +25,5 @@ env/
 *.swo
 
 data/
+.vercel
+.env*
