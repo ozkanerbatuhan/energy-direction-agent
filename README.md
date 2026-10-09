@@ -41,18 +41,26 @@ The target is EPİAŞ's realized **net balancing instruction** (YAL − YAT, MWh
 - `Net > 0` → Grid was **AÇIK (DEFICIT)** — TEİAŞ ordered up-regulation
 - `Net < 0` → Grid was **FAZLA (SURPLUS)** — TEİAŞ ordered down-regulation
 
-```
-Forecast(h) = mean of Net(h) over the past 7 days
-```
+A logistic regression (`app/model.py`, weights in `app/model.json`) gives the deficit
+probability for each hour, using only what is known `k` hours ahead: day-ahead PTF and its
+shape within the day, KGÜP components (gas, wind, solar, hydro…), LEP, the last published
+net instructions (published ~6 h late), SMF − PTF, and the solar-excluded physical deviation
+(~2 h late). Bar height = (2p − 1) × mean |net| of that hour over the past 7 days.
 
-Backtest, 19 Sep – 8 Oct 2026 (461 hours), direction hit rate:
+Walk-forward test (train on all months before, test the next month; May–Oct 2026,
+~38k hour×horizon rows, horizons 1–24 h):
 
-| Model | Hit rate | MAE |
-|---|---|---|
-| Old physical formula (consumption/generation deviation + momentum + outages) | 46.6% | 4213 MWh |
-| Same, solar excluded | 51.6% | 1377 MWh |
-| Always "surplus" | 56.4% | 563 MWh |
-| **7-day net instruction mean (current)** | **63.3%** | **552 MWh** |
+| Model | Direction hit rate |
+|---|---|
+| Always "surplus" | 47.5% |
+| 7-day same-hour net mean | 60.0% |
+| **Logistic regression (current)** | **65.3%** |
+| … when p > 0.8 or p < 0.2 (13% of hours) | 78% |
+
+Old in-place physical formula: 46.6% (19 Sep – 8 Oct backtest).
+
+Retrain monthly: `python scripts/train_model.py --cache hist.json` (needs numpy + scikit-learn
+locally; the backend only reads the JSON weights).
 
 The old formula subtracted realtime generation (only metered, licensed PV ≈ 3 GW) from KGÜP
 (all PV incl. unlicensed ≈ 15–19 GW), which showed a fake ~13 GW "deficit" every midday.

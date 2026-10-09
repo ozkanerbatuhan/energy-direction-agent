@@ -4,13 +4,16 @@ engine.py — Türkiye şebekesi saatlik açık / fazla yön tahmini.
 Hedef büyüklük EPİAŞ'ın gerçekleşen net dengeleme talimatıdır (YAL − YAT):
     Net > 0  →  AÇIK (DEFICIT)   — TEİAŞ yük aldırdı
     Net < 0  →  FAZLA (SURPLUS)  — TEİAŞ yük attırdı
-Tahmin = son BASELINE_DAYS günün aynı saatindeki net ortalaması (gerekçe:
-calculate_daily_forecast docstring'i). Fiziksel sapma ve arıza yalnız bilgi amaçlı.
+Yön ve açık olasılığı app/model.py'deki lojistik regresyondan gelir (model.json yoksa
+son BASELINE_DAYS günün aynı saatindeki net ortalamasına düşer). Fiziksel sapma ve arıza
+yalnız bilgi amaçlı.
 """
 
 import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+
+from app.model import build_series, features, load_model, predict_proba
 
 logger = logging.getLogger(__name__)
 
@@ -166,18 +169,11 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
     """
     24 saatlik sistem yönü tahmini.
 
-    Hedef: EPİAŞ'ın gerçekleşen net dengeleme talimatı (YAL − YAT, MWh).
-    Pozitif = sistem açık verdi (yük aldırıldı), negatif = fazla (yük attırıldı).
-
-    Tahmin(H) = son BASELINE_DAYS günün aynı saatindeki net talimat ortalaması.
-
-    Neden bu kadar sade: 19 Eyl – 8 Eki 2026 backtest'inde (461 saat)
-      - eski fiziksel formül (tüketim/üretim sapması + momentum + arıza): %47-52 yön isabeti
-      - "hep fazla" demek: %56
-      - 7 günlük net talimat ortalaması: %63, MAE ~550 MWh
-    Momentum ya da fiziksel sapma eklemek isabeti düşürdü; o yüzden yalnız bilgi olarak
-    raporlanır, tahmine girmez. Dağıtım kesintileri (outage) de tüketiciyi düşürdüğü için
-    açık yönünde eklenemez; bilgi olarak kalır.
+    Her saat için açık olasılığı p = lojistik regresyon (app/model.py), "şimdi"den
+    o saate kadar geçen ufukla (k) bilinebilecek veriyle. Bar değeri:
+        forecast_delta_mw = (2p − 1) × son 7 günün bu saatteki ortalama |net|
+    Yön modelden, büyüklük geçmişten. Ay ay ileri yürüyen test (May–Eki 2026):
+    %65 yön isabeti; 7 günlük net ortalaması %60, eski fiziksel formül ~%47-52.
     """
     logger.info("Net talimat tabanlı yön tahmini başlatılıyor...")
 
@@ -214,6 +210,7 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
 
     past_days = [today_start - timedelta(days=d) for d in range(1, BASELINE_DAYS + 1)]
     baselines_mw: dict[str, float] = {}
+    magnitudes_mw: dict[str, float] = {}
     baseline_counts: dict[str, int] = {}
     for h in range(24):
         hour_str = f"{h:02d}"
@@ -221,7 +218,24 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
         vals = [net_at(k) for k in keys if _find_string(sys_dir_items, k, ["systemDirection"])]
         vals = [v for v in vals if v is not None]
         baselines_mw[hour_str] = sum(vals) / len(vals) if vals else 0.0
+        magnitudes_mw[hour_str] = sum(abs(v) for v in vals) / len(vals) if vals else 0.0
         baseline_counts[hour_str] = len(vals)
+
+    # Lojistik regresyon (app/model.py). Yoksa 7 günlük ortalamaya düşülür.
+    model = load_model()
+    S = build_series({
+        "ptf": _extract_items(finance_raw.get("k_ptf")),
+        "smf": _extract_items(finance_raw.get("smf")),
+        "load_estimation": load_items,
+        "realtime_consumption": cons_items,
+        "realtime_generation": gen_items,
+        "dpp": dpp_items,
+        "yal": yal_items,
+        "system_direction": sys_dir_items,
+    }) if model else None
+    # "Şimdi": bugün için içinde bulunulan saat; geçmiş bir gün için gün sonu (her saat 1 saat önceden)
+    now_hour = (now if not target_date else today_start + timedelta(days=1)).replace(
+        minute=0, second=0, microsecond=0, tzinfo=None)
 
     hourly_predictions = []
     for h in range(24):
@@ -240,11 +254,24 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
         reason = f"Son {baseline_counts[hour_str]} gün bu saat: ort. {abs(round(base))} MWh " + (
             "açık" if base > 0 else "fazla" if base < 0 else "denge")
 
+        prob = None
+        horizon = None
+        missing = None
+        forecast = base
+        if model:
+            t = today_start.replace(tzinfo=None) + timedelta(hours=h)
+            horizon = max(1, int((t - now_hour).total_seconds() // 3600))
+            prob, missing = predict_proba(model, features(S, t, horizon))
+            # Yön modelden, büyüklük son 7 günün bu saatteki ortalama |net|'inden
+            forecast = (2 * prob - 1) * magnitudes_mw[hour_str]
+            reason = f"Açık olasılığı %{round(prob * 100)} ({horizon} sa önceden) | " + reason
+
         hourly_predictions.append({
             "hour": t_key,
             "is_forecast": realized is None,
-            "forecast_delta_mw": round(base, 2),
-            "forecast_direction": _get_direction(base),
+            "forecast_delta_mw": round(forecast, 2),
+            "forecast_direction": _get_direction(forecast),
+            "deficit_probability": round(prob, 4) if prob is not None else None,
             "realized_delta_mw": round(realized, 2) if realized is not None else None,
             "realized_direction": epias_dir,
             "physical_delta_mw": round(physical, 2) if physical is not None else None,
@@ -255,6 +282,9 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
             "reason_parts": {
                 "baseline_mw": round(base, 2),
                 "baseline_days": baseline_counts[hour_str],
+                "probability": round(prob, 4) if prob is not None else None,
+                "horizon_h": horizon,
+                "missing_features": missing,
                 "physical_mw": round(physical, 2) if physical is not None else None,
                 "outage_mw": round(outage, 2),
             },
@@ -262,6 +292,8 @@ def calculate_daily_forecast(raw_data: dict, target_date: str = None) -> dict | 
         })
 
     return {
+        "model": {"type": model["type"], "trained_at": model["trained_at"],
+                  "walk_forward_accuracy": model["walk_forward"]["model"]} if model else None,
         "historical_baselines_mw": {k: round(v, 2) for k, v in baselines_mw.items()},
         "hourly_predictions": hourly_predictions,
         "calculated_at": now.isoformat()

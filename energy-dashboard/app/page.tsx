@@ -20,6 +20,8 @@ const trDate = (d: Date = new Date()) => d.toLocaleDateString("sv-SE", { timeZon
 type ReasonParts = {
   baseline_mw: number;
   baseline_days: number;
+  probability?: number | null;
+  horizon_h?: number | null;
   physical_mw: number | null;
   outage_mw: number;
 };
@@ -30,6 +32,7 @@ type HourlyPrediction = {
   forecast_delta_mw: number;
   realized_delta_mw: number | null;
   realized_direction?: string | null;
+  deficit_probability?: number | null;
   physical_delta_mw?: number | null;
   outage_mw: number;
   reasoning: string;
@@ -459,7 +462,7 @@ export default function Dashboard() {
 
 
   const chartInfoTexts: Record<string, string> = {
-    agent: "Tahmin: son 7 günün aynı saatinde EPİAŞ'ın verdiği net dengeleme talimatının (YAL − YAT) ortalaması. Gerçekleşen: EPİAŞ'ın yayınladığı net talimat (birkaç saat gecikmeli). Pozitif = açık, negatif = fazla.",
+    agent: "Tahmin: PTF, KGÜP bileşenleri, son yayınlanan dengeleme talimatları ve saat/gün bilgisiyle eğitilmiş lojistik regresyon; yönü ve açık olasılığını verir. Bar yüksekliği = (2·olasılık − 1) × son 7 günün o saatteki ortalama |net| talimatı. Ay ay ileri yürüyen testte yön isabeti %65 (7 günlük ortalama %60); olasılık %80 üstü / %20 altıyken %78. Gerçekleşen: EPİAŞ'ın yayınladığı net talimat (~6 sa gecikmeli).",
     plan: "EPİAŞ Yük Tahmin Planı (LEP) ile Kesinleşmiş Gün Öncesi Üretim Planı (DPP) arasındaki ham fark. Yön göstergesi değildir: DPP ithalatı ve bazı üretimi kapsamadığı için fark yapısal olarak ~+1,5 GW kayıktır (19 Eyl – 8 Eki: saatlerin %97'si pozitif, gerçek yönle isabet %47)."
   };
 
@@ -548,6 +551,7 @@ export default function Dashboard() {
                             <>
                               <div className={`text-xl font-bold mb-2 ${(hourData.forecast_delta_mw > 0) ? 'text-rose-400' : 'text-emerald-400'}`}>
                                 Tahmin: {hourData.forecast_delta_mw} MW <span className="text-sm font-normal">({hourData.forecast_direction})</span>
+                                {hourData.deficit_probability != null && <span className="block text-xs font-normal text-slate-400">Açık olasılığı %{Math.round(hourData.deficit_probability * 100)}</span>}
                               </div>
                               {!hourData.is_forecast && hourData.realized_delta_mw !== null && (
                                 <div className="mt-1 pt-2 border-t border-slate-700 text-sm">
@@ -654,6 +658,15 @@ export default function Dashboard() {
                         <td className="px-6 py-4 text-xs">
                           {row.reason_parts ? (
                             <div className="flex flex-col gap-1.5">
+                              {row.reason_parts.probability != null && (
+                                <div className="flex items-center gap-2" title={`${row.reason_parts.horizon_h} saat önceden bilinebilecek veriyle`}>
+                                  <span className="w-2 h-2 rounded-full bg-violet-500 shrink-0"></span>
+                                  <span className="text-slate-500 w-24 shrink-0">Açık olasılığı:</span>
+                                  <span className={`font-mono font-semibold ${row.reason_parts.probability > 0.5 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                    %{Math.round(row.reason_parts.probability * 100)}
+                                  </span>
+                                </div>
+                              )}
                               <div className="flex items-center gap-2">
                                 <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0"></span>
                                 <span className="text-slate-500 w-24 shrink-0">{row.reason_parts.baseline_days} gün ort.:</span>

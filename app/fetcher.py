@@ -48,8 +48,8 @@ RETRY_BACKOFF = 2  # saniye
 
 def _fetch_range(target_date: str = None) -> tuple[str, str]:
     """
-    Geçmiş 7 günlük veriyi de kapsayacak biçimde
-    (target_date - 7 days) ile (target_date) arasındaki başlangıç ve bitiş saatlerini
+    Geçmiş 10 günlük veriyi de kapsayacak biçimde
+    (target_date - 10 days) ile (target_date) arasındaki başlangıç ve bitiş saatlerini
     EPİAŞ'ın beklediği T00:00:00+03:00 formatında döndürür.
     """
     if target_date:
@@ -58,7 +58,7 @@ def _fetch_range(target_date: str = None) -> tuple[str, str]:
         now = datetime.now(tz=TZ_ISTANBUL)
         
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    past_start = day_start - timedelta(days=7)  # engine.BASELINE_DAYS
+    past_start = day_start - timedelta(days=10)  # model: 8 gün net7 + 168 sa pencere + gecikme
     
     fmt = "%Y-%m-%dT%H:%M:%S%z"
     start_raw = past_start.strftime(fmt)
